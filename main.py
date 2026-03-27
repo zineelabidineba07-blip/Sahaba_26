@@ -37,7 +37,7 @@ if not GEMINI_KEYS:
 
 logger.info(f"✅ Loaded {len(GEMINI_KEYS)} Gemini API keys")
 
-MODEL_NAME = "gemini-1.5-flash"  # مستقر ومدعوم رسمياً
+MODEL_NAME = "gemini-3-flash-preview"  # مستقر ومدعوم رسمياً
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 # ─────────────────────────────
