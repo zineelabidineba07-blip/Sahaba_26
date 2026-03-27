@@ -4,12 +4,14 @@ import uuid
 import asyncio
 import logging
 import json
+import re
 from typing import List, Dict, Optional
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
 logging.basicConfig(
@@ -37,7 +39,8 @@ if not GEMINI_KEYS:
 
 logger.info(f"✅ Loaded {len(GEMINI_KEYS)} Gemini API keys")
 
-MODEL_NAME = "gemini-3-flash-preview"  # مستقر ومدعوم رسمياً
+# 🎯 الموديل كما طلبت - لم نلمسه
+MODEL_NAME = "gemini-3-flash-preview"
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 # ─────────────────────────────
@@ -48,7 +51,6 @@ MAX_TPM = 32000
 MAX_RPD = 1000
 COOLDOWN_MULTIPLIER = 2
 
-# Safety margin reduced to 98% (thanks to countTokens accuracy)
 SAFETY_MARGIN = 0.98
 SAFE_RPM = int(MAX_RPM * SAFETY_MARGIN)
 SAFE_TPM = int(MAX_TPM * SAFETY_MARGIN)
@@ -237,6 +239,10 @@ class SmartKeyOrchestrator:
         async with self.lock:
             key.record_error(status_code, error)
 
+    def release_reservation(self, key: KeyState, amount: int):
+        """Release reserved tokens - thread-safe"""
+        key.reserved_tpm = max(0, key.reserved_tpm - amount)
+
     def get_cluster_stats(self) -> Dict:
         total_capacity = len(self.keys) * SAFE_TPM
         used_capacity = sum(k.metrics.tpm + k.reserved_tpm for k in self.keys)
@@ -346,10 +352,7 @@ class GeminiClient:
         self.orchestrator = orchestrator
 
     async def count_tokens(self, contents: List[Dict], key: str) -> int:
-        """
-        استخدام countTokens API من Google لحساب التوكنز بدقة
-        https://ai.google.dev/api/count-tokens
-        """
+        """استخدام countTokens API من Google لحساب التوكنز بدقة"""
         try:
             payload = {"contents": contents}
             
@@ -382,10 +385,21 @@ class GeminiClient:
                 total += max(1, int(len(p.get("text", "")) * 0.25))
         return total + 200
 
+    def _extract_reply_fallback(self, text: str) -> Optional[str]:
+        """Extract reply from malformed JSON using regex"""
+        try:
+            # Try to find "reply": "value" pattern
+            match = re.search(r'"reply"\s*:\s*"([^"]*(?:\\.[^"]*)*)"', text)
+            if match:
+                # Unescape JSON string
+                return match.group(1).replace('\\"', '"').replace('\\n', '\n')
+            return None
+        except:
+            return None
+
     async def generate_response(self, messages: List[Dict]) -> Dict:
         """Generate response with countTokens + System Instructions"""
         
-        # Build contents
         contents = []
         for msg in messages:
             role = "user" if msg["role"] == "user" else "model"
@@ -394,131 +408,147 @@ class GeminiClient:
                 "parts": [{"text": msg["content"]}]
             })
 
-        # Get best key for countTokens call
-        key_state = await self.orchestrator.get_best_key(500)
+        # STEP 1: Reserve tokens for countTokens call
+        count_tokens_reservation = 500
+        key_state = await self.orchestrator.get_best_key(count_tokens_reservation)
         if not key_state:
             raise HTTPException(status_code=503, detail="No keys available")
 
-        # 🎯 STEP 1: Use countTokens API for accurate count
-        exact_tokens = await self.count_tokens(contents, key_state.key)
-        
-        # Add system instruction tokens (approximately 50 tokens)
-        total_input_tokens = exact_tokens + 50
-        
-        # Release the reservation from get_best_key
-        async with self.orchestrator.lock:
-            key_state.reserved_tpm = max(0, key_state.reserved_tpm - 500)
+        first_key = key_state.key
 
-        # 🎯 STEP 2: Get best key with accurate token count
-        key_state = await self.orchestrator.get_best_key(total_input_tokens + 400)
-        if not key_state:
-            raise HTTPException(status_code=503, detail="No keys available for generation")
+        try:
+            # STEP 2: Get accurate token count
+            exact_tokens = await self.count_tokens(contents, first_key)
+            total_input_tokens = exact_tokens + 50  # system instruction overhead
+            
+            # Release countTokens reservation
+            self.orchestrator.release_reservation(key_state, count_tokens_reservation)
 
-        key = key_state.key
-        key_id = key_state.key_id[:8]
+            # STEP 3: Get best key for generation with accurate count
+            generation_reservation = total_input_tokens + 400
+            key_state = await self.orchestrator.get_best_key(generation_reservation)
+            if not key_state:
+                raise HTTPException(status_code=503, detail="No keys available for generation")
 
-        # Dynamic temperature based on conversation length
-        temperature = 0.7 if len(messages) < 10 else 0.85
-        max_tokens = min(400, SAFE_TPM - total_input_tokens)
+            key = key_state.key
+            key_id = key_state.key_id[:8]
 
-        # 🎯 STEP 3: Build payload with System Instructions (Google Best Practice)
-        payload = {
-            "contents": contents,
-            "systemInstruction": SYSTEM_INSTRUCTION,  # منفصل حسب معايير Google
-            "generationConfig": {
-                "temperature": temperature,
-                "maxOutputTokens": max_tokens,
-                "responseMimeType": "application/json",
-                "responseSchema": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "reply": {
-                            "type": "STRING",
-                            "description": "الرد باللهجة الجزائرية"
-                        }
-                    },
-                    "required": ["reply"]
+            temperature = 0.7 if len(messages) < 10 else 0.85
+            max_tokens = min(400, SAFE_TPM - total_input_tokens)
+
+            payload = {
+                "contents": contents,
+                "systemInstruction": SYSTEM_INSTRUCTION,
+                "generationConfig": {
+                    "temperature": temperature,
+                    "maxOutputTokens": max_tokens,
+                    "responseMimeType": "application/json",
+                    "responseSchema": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "reply": {
+                                "type": "STRING",
+                                "description": "الرد باللهجة الجزائرية"
+                            }
+                        },
+                        "required": ["reply"]
+                    }
                 }
             }
-        }
 
-        # 🎯 STEP 4: Make request with retry logic
-        max_retries = min(5, len(self.orchestrator.keys))
-        
-        for attempt in range(max_retries):
-            try:
-                response = await self.client.post(
-                    f"{GEMINI_BASE}/{MODEL_NAME}:generateContent",
-                    params={"key": key},
-                    json=payload,
-                    timeout=25.0,
-                    headers={"Content-Type": "application/json"}
-                )
+            max_retries = min(5, len(self.orchestrator.keys))
+            
+            for attempt in range(max_retries):
+                try:
+                    response = await self.client.post(
+                        f"{GEMINI_BASE}/{MODEL_NAME}:generateContent",
+                        params={"key": key},
+                        json=payload,
+                        timeout=25.0,
+                        headers={"Content-Type": "application/json"}
+                    )
 
-                if response.status_code == 429:
-                    await self.orchestrator.report_error(key_state, 429, "Rate limit")
-                    # Get new key for retry
-                    key_state = await self.orchestrator.get_best_key(total_input_tokens + 400)
-                    if not key_state:
-                        await asyncio.sleep(2 ** attempt)
+                    if response.status_code == 429:
+                        await self.orchestrator.report_error(key_state, 429, "Rate limit")
+                        self.orchestrator.release_reservation(key_state, generation_reservation)
+                        key_state = await self.orchestrator.get_best_key(generation_reservation)
+                        if not key_state:
+                            await asyncio.sleep(2 ** attempt)
+                            continue
+                        key = key_state.key
+                        key_id = key_state.key_id[:8]
                         continue
-                    key = key_state.key
-                    key_id = key_state.key_id[:8]
+
+                    elif response.status_code == 403:
+                        await self.orchestrator.report_error(key_state, 403, "Invalid key")
+                        self.orchestrator.release_reservation(key_state, generation_reservation)
+                        key_state = await self.orchestrator.get_best_key(generation_reservation)
+                        if not key_state:
+                            raise HTTPException(status_code=503, detail="All keys invalid")
+                        key = key_state.key
+                        key_id = key_state.key_id[:8]
+                        continue
+
+                    elif response.status_code >= 500:
+                        await self.orchestrator.report_error(key_state, response.status_code, "Server error")
+                        await asyncio.sleep(1)
+                        continue
+
+                    response.raise_for_status()
+                    data = response.json()
+
+                    text = data["candidates"][0]["content"]["parts"][0]["text"]
+                    
+                    # Try normal JSON parse first
+                    try:
+                        result = json.loads(text)
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"JSON decode failed, trying fallback: {e}")
+                        # Try regex fallback
+                        reply_fallback = self._extract_reply_fallback(text)
+                        if reply_fallback:
+                            result = {"reply": reply_fallback}
+                        else:
+                            raise
+
+                    if not isinstance(result.get("reply"), str):
+                        raise ValueError("Invalid reply type")
+
+                    usage = data.get("usageMetadata", {})
+                    actual_tokens = usage.get("totalTokenCount", total_input_tokens)
+
+                    await self.orchestrator.report_success(key_state, actual_tokens)
+
+                    logger.debug(
+                        f"✅ Key {key_id}... | "
+                        f"Input: {total_input_tokens} | "
+                        f"Total: {actual_tokens} | "
+                        f"RPM: {key_state.metrics.rpm}/{SAFE_RPM}"
+                    )
+
+                    return {
+                        "reply": result.get("reply", "عذراً، ما فهمتش"),
+                        "tokens_used": actual_tokens,
+                        "tokens_input": total_input_tokens,
+                        "key_id": key_id
+                    }
+
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON decode error: {e}")
+                    await self.orchestrator.report_error(key_state, 0, f"JSON error: {str(e)}")
                     continue
 
-                elif response.status_code == 403:
-                    await self.orchestrator.report_error(key_state, 403, "Invalid key")
-                    key_state = await self.orchestrator.get_best_key(total_input_tokens + 400)
-                    if not key_state:
-                        raise HTTPException(status_code=503, detail="All keys invalid")
-                    key = key_state.key
-                    key_id = key_state.key_id[:8]
-                    continue
-
-                elif response.status_code >= 500:
-                    await self.orchestrator.report_error(key_state, response.status_code, "Server error")
+                except Exception as e:
+                    logger.error(f"Request error (attempt {attempt + 1}): {e}")
+                    await self.orchestrator.report_error(key_state, 0, str(e))
                     await asyncio.sleep(1)
-                    continue
 
-                response.raise_for_status()
-                data = response.json()
-
-                # Parse response
-                text = data["candidates"][0]["content"]["parts"][0]["text"]
-                result = json.loads(text)
-
-                # Get actual tokens from usageMetadata
-                usage = data.get("usageMetadata", {})
-                actual_tokens = usage.get("totalTokenCount", total_input_tokens)
-
-                # Report success
-                await self.orchestrator.report_success(key_state, actual_tokens)
-
-                logger.debug(
-                    f"✅ Key {key_id}... | "
-                    f"Input: {total_input_tokens} | "
-                    f"Total: {actual_tokens} | "
-                    f"RPM: {key_state.metrics.rpm}/{SAFE_RPM}"
-                )
-
-                return {
-                    "reply": result.get("reply", "عذراً، ما فهمتش"),
-                    "tokens_used": actual_tokens,
-                    "tokens_input": total_input_tokens,
-                    "key_id": key_id
-                }
-
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON decode error: {e}")
-                await self.orchestrator.report_error(key_state, 0, f"JSON error: {str(e)}")
-                continue
-
-            except Exception as e:
-                logger.error(f"Request error (attempt {attempt + 1}): {e}")
-                await self.orchestrator.report_error(key_state, 0, str(e))
-                await asyncio.sleep(1)
-
-        raise HTTPException(status_code=503, detail="All API keys exhausted")
+            raise HTTPException(status_code=503, detail="All API keys exhausted")
+            
+        finally:
+            # Ensure any remaining reservation is released
+            if key_state:
+                self.orchestrator.release_reservation(key_state, count_tokens_reservation)
 
 # ─────────────────────────────
 # FASTAPI APP
@@ -548,7 +578,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Sahaba Chatbot - سحابة",
     description="بوت دردشة جزائري مع countTokens + System Instructions",
-    version="3.0.0",
+    version="3.1.0",
     lifespan=lifespan
 )
 
@@ -626,12 +656,10 @@ async def keys_status():
 
 @app.get("/token-count")
 async def token_count_demo(message: str):
-    """
-    Demo endpoint to test countTokens API
-    Example: /token-count?message=السلام عليكم
-    """
     contents = [{"role": "user", "parts": [{"text": message}]}]
-    key = GEMINI_KEYS[0]
+    key = GEMINI_KEYS[0] if GEMINI_KEYS else None
+    if not key:
+        raise HTTPException(status_code=503, detail="No keys available")
     
     try:
         exact_count = await gemini.count_tokens(contents, key)
@@ -643,11 +671,15 @@ async def token_count_demo(message: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/")
-async def root():
+# ✅ FIX: Support both GET and HEAD for root endpoint
+@app.api_route("/", methods=["GET", "HEAD"])
+async def root(request: Request):
+    if request.method == "HEAD":
+        return JSONResponse(content={})
+    
     return {
         "name": "سحابة | Sahaba",
-        "version": "3.0.0",
+        "version": "3.1.0",
         "model": MODEL_NAME,
         "total_keys": len(GEMINI_KEYS),
         "features": {
