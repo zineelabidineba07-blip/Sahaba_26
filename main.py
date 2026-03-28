@@ -1,11 +1,9 @@
 import os
-import time
 import asyncio
 import logging
-import json
-from contextlib import asynccontextmanager
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request
 
 # ───────── CONFIG ─────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
@@ -28,7 +26,7 @@ SYSTEM_INSTRUCTION = {
     "parts": [{"text": "رد مختصر باللهجة الجزائرية."}]
 }
 
-# ───────── KEY MANAGER ─────────
+# ───────── KEY MANAGER (ROUND-ROBIN) ─────────
 class KeyManager:
     def __init__(self, keys):
         self.keys = keys
@@ -41,22 +39,19 @@ class KeyManager:
             self.index = (self.index + 1) % len(self.keys)
             return key
 
-# ───────── GEMINI ─────────
+# ───────── GEMINI (RETRY + FAILOVER) ─────────
 class Gemini:
     def __init__(self, client, km):
         self.client = client
         self.km = km
 
     async def generate(self, text):
-        if len(text) > MAX_INPUT_CHARS:
-            raise HTTPException(400, "Input too large")
-
         payload = {
             "contents": [{"role": "user", "parts": [{"text": text}]}],
             "systemInstruction": SYSTEM_INSTRUCTION,
         }
 
-        for key_attempt in range(len(GEMINI_KEYS)):
+        for _ in range(len(GEMINI_KEYS)):
             key = await self.km.get()
 
             for attempt in range(3):
@@ -77,14 +72,12 @@ class Gemini:
                         continue
 
                     if r.status_code in (401, 403):
-                        break  # switch key
-
-                    raise HTTPException(500, r.text)
+                        break
 
                 except Exception:
                     await asyncio.sleep(2 ** attempt)
 
-        raise HTTPException(503, "Gemini unavailable")
+        return "عندي ضغط شوية، عاود بعد لحظة 🙏"
 
 # ───────── TELEGRAM ─────────
 class Telegram:
@@ -97,6 +90,16 @@ class Telegram:
             json={"chat_id": chat_id, "text": text},
             timeout=10
         )
+
+    async def typing(self, chat_id):
+        try:
+            await self.client.post(
+                f"{TELEGRAM_API}/sendChatAction",
+                json={"chat_id": chat_id, "action": "typing"},
+                timeout=5
+            )
+        except:
+            pass
 
     async def webhook(self):
         await self.client.post(
@@ -126,11 +129,23 @@ async def lifespan(app: FastAPI):
 
 app.router.lifespan_context = lifespan
 
-# ───────── WEBHOOK ─────────
+# ───────── NON-BLOCKING PROCESSOR ─────────
+async def process_message(chat_id, text):
+    await telegram.typing(chat_id)
+
+    try:
+        reply = await gemini.generate(text)
+    except Exception:
+        reply = "خطأ مؤقت"
+
+    await telegram.send(chat_id, reply)
+
+# ───────── WEBHOOK (FAST RETURN) ─────────
 @app.post("/webhook")
 async def webhook(req: Request):
     data = await req.json()
     msg = data.get("message")
+
     if not msg:
         return {"ok": True}
 
@@ -140,12 +155,8 @@ async def webhook(req: Request):
     if not text:
         return {"ok": True}
 
-    try:
-        reply = await gemini.generate(text)
-    except Exception:
-        reply = "خطأ مؤقت"
+    asyncio.create_task(process_message(chat_id, text))
 
-    await telegram.send(chat_id, reply)
     return {"ok": True}
 
 # ───────── HEALTH ─────────
