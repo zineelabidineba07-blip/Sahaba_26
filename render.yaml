@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: sahaba-bot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free           # Change to "starter" for always-on
+    healthCheckPath: /health
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: RENDER_URL
+        sync: false
+      # Gemini API keys - add as many as you need
+      - key: GEMINI_KEY_1
+        sync: false
+      - key: GEMINI_KEY_2
+        sync: false
+      # Add GEMINI_KEY_3 ... GEMINI_KEY_N as needed
