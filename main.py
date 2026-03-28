@@ -321,10 +321,13 @@ class SupabaseClient:
                 timeout=5.0,
             )
             if r.status_code == 200:
+                # Reverse to get oldest first
                 return list(reversed(r.json()))
+            # Return empty list on error or no results
             return []
         except Exception as e:
-             logger.error(f"Supabase get_history: {e}")
+            logger.error(f"Supabase get_history: {e}")
+            # Ensure we return a list even on exception
             return []
 
     async def save_message(
@@ -418,7 +421,7 @@ class GeminiClient:
             pass
         return ""
 
-    # ── count─────────────────────────────────────
+    # ── countTokens API ──────────────────────────────────────
     async def count_tokens(self, contents: List[Dict], key: str, key_state=None) -> int:
         """
         Use the countTokens API for accurate token counting.
@@ -726,7 +729,7 @@ async def telegram_webhook(request: Request):
     try:
         update = json.loads(raw_body)
     except Exception as e:
-        logger.error(f"❌ JSON parse failed: {eraw_body[:100]}")
+        logger.error(f"❌ JSON parse failed: {e} | raw={raw_body[:100]}")
         return {"ok": True}
 
     logger.info(f"📨 Update received | keys={list(update.keys())} | update_id={update.get('update_id')}")
