@@ -15,14 +15,14 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("sahaba_bot")
-# Keep httpx/uvicorn less noisy
+# Silence HTTP/2 internals noise
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+logging.getLogger("hpack").setLevel(logging.WARNING)
 
 # ─────────────────────────────────────────────────────────────
 # CONFIGURATION
@@ -698,8 +698,7 @@ gemini:       Optional[GeminiClient]         = None
 telegram:     Optional[TelegramClient]       = None
 http_client:  Optional[httpx.AsyncClient]    = None
 
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "sahaba_secret_2025")
-RENDER_URL     = os.environ.get("RENDER_URL", "")   # e.g. https://sahaba.onrender.com
+RENDER_URL = os.environ.get("RENDER_URL", "")   # e.g. https://sahaba.onrender.com
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -715,7 +714,7 @@ async def lifespan(app: FastAPI):
 
     # Auto-register webhook if RENDER_URL is set
     if RENDER_URL:
-        webhook_url = f"{RENDER_URL}/webhook/{WEBHOOK_SECRET}"
+        webhook_url = f"{RENDER_URL}/webhook"
         await telegram.set_webhook(webhook_url)
 
     logger.info(f"🚀 Sahaba bot started — model: {MODEL_NAME}")
@@ -737,19 +736,14 @@ app = FastAPI(
 # ─────────────────────────────────────────────────────────────
 # TELEGRAM WEBHOOK HANDLER
 # ─────────────────────────────────────────────────────────────
-@app.post("/webhook/{secret}")
-async def telegram_webhook(secret: str, request: Request):
-    # Read raw body first for maximum debug visibility
+@app.post("/webhook")
+async def telegram_webhook(request: Request):
     try:
         raw_body = await request.body()
-        logger.info(f"📥 Webhook | secret_match={secret == WEBHOOK_SECRET} | bytes={len(raw_body)}")
+        logger.info(f"📥 Webhook hit | bytes={len(raw_body)}")
     except Exception as e:
         logger.error(f"❌ body read error: {e}")
         return {"ok": True}
-
-    if secret != WEBHOOK_SECRET:
-        logger.error(f"❌ Wrong secret received: [{secret}]")
-        raise HTTPException(403, "Invalid secret")
 
     try:
         import json as _json
