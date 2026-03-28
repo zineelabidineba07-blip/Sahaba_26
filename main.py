@@ -14,7 +14,7 @@ GEMINI_KEYS = [v for k, v in os.environ.items() if k.startswith("GEMINI_KEY_") a
 if not GEMINI_KEYS:
     raise RuntimeError("No GEMINI_KEY_X provided")
 
-MODEL_NAME   = "gemini-3.1-pro-preview"
+MODEL_NAME   = "gemini-3-flash-preview"
 GEMINI_BASE  = "https://generativelanguage.googleapis.com/v1beta/models"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
