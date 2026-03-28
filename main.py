@@ -34,10 +34,10 @@ if not TELEGRAM_TOKEN:
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("❌ Missing Supabase config")
 
-GEMINI_KEYS = sorted([
-    v for k, v in os.environ.items()
-    if k.startswith("GEMINI_KEY_") and v.strip()
-])
+import random as _random
+_raw_keys = [v for k, v in os.environ.items() if k.startswith("GEMINI_KEY_") and v.strip()]
+_random.shuffle(_raw_keys)
+GEMINI_KEYS = _raw_keys
 if not GEMINI_KEYS:
     raise RuntimeError("❌ No Gemini keys found (GEMINI_KEY_1 ... GEMINI_KEY_N)")
 
@@ -455,7 +455,7 @@ class GeminiClient:
                 count = r.json().get("totalTokens", 0)
                 logger.debug(f"🔢 countTokens → {count}")
                 return count
-            logger.warning(f"countTokens failed ({r.status_code}), using fallback")
+            logger.warning(f"countTokens failed ({r.status_code}): {r.text[:200]}, using fallback")
             return self._estimate_tokens(contents)
         except Exception as e:
             logger.warning(f"countTokens error: {e} — using fallback")
@@ -498,8 +498,11 @@ class GeminiClient:
         thinking_cfg = get_thinking_config(len(messages))
 
         # Output token cap: leave room inside SAFE_TPM
-        max_output = min(1024, SAFE_TPM - total_input - 200)
-        max_output = max(256, max_output)   # never below 256
+        # thinking tokens count against maxOutputTokens (Google confirmed)
+        # Source: https://github.com/valentinfrlch/ha-llmvision/issues/609
+        # Must be large enough to hold thinking + actual reply
+        max_output = min(8192, SAFE_TPM - total_input - 200)
+        max_output = max(2048, max_output)  # never below 2048
 
         payload = {
             "contents":          contents,
