@@ -1,9 +1,3 @@
-
----
-
-## 6. `main.py` (مصحح - مع تحسين `maxOutputTokens`)
-
-```python
 import os
 import time
 import uuid
