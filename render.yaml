@@ -3,7 +3,7 @@ services:
     name: sahaba-bot
     runtime: docker
     dockerfilePath: ./Dockerfile
-    plan: free           # Change to "starter" for always-on
+    plan: free
     healthCheckPath: /health
     envVars:
       - key: TELEGRAM_TOKEN
@@ -14,9 +14,15 @@ services:
         sync: false
       - key: RENDER_URL
         sync: false
-      # Gemini API keys - add as many as you need
+      # مفاتيح Gemini API
       - key: GEMINI_KEY_1
         sync: false
       - key: GEMINI_KEY_2
         sync: false
-      # Add GEMINI_KEY_3 ... GEMINI_KEY_N as needed
+      # إعدادات Rate Limits (اختيارية - اضبطها حسب حسابك)
+      - key: GEMINI_MAX_RPM
+        value: "30"        # غيّر حسب ما يظهر في AI Studio
+      - key: GEMINI_MAX_TPM
+        value: "200000"    # غيّر حسب ما يظهر في AI Studio
+      - key: GEMINI_MAX_RPD
+        value: "1500"      # غيّر حسب ما يظهر في AI Studio
