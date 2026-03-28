@@ -42,7 +42,6 @@ if not GEMINI_KEYS:
 
 logger.info(f"✅ {len(GEMINI_KEYS)} Gemini key(s) loaded")
 
-# ✅ تم التحويل إلى Gemini 2.5 Flash
 MODEL_NAME   = "gemini-2.5-flash"
 GEMINI_BASE  = "https://generativelanguage.googleapis.com/v1beta/models"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
@@ -60,7 +59,7 @@ SAFE_RPD = int(MAX_RPD * SAFETY_MARGIN)
 logger.info(f"📊 Rate limits: RPM={MAX_RPM} (safe={SAFE_RPM}), TPM={MAX_TPM} (safe={SAFE_TPM}), RPD={MAX_RPD} (safe={SAFE_RPD})")
 
 # ─────────────────────────────────────────────────────────────
-# SYSTEM INSTRUCTION – نسخة محسنة (أقصر + أمثلة)
+# SYSTEM INSTRUCTION – محسن للدارجة والـ Arabizi
 # ─────────────────────────────────────────────────────────────
 SYSTEM_INSTRUCTION = {
     "parts": [{
@@ -84,19 +83,7 @@ SYSTEM_INSTRUCTION = {
 }
 
 # ─────────────────────────────────────────────────────────────
-# THINKING CONFIG (خفيف للردود السريعة)
-# ─────────────────────────────────────────────────────────────
-def get_thinking_config(history_len: int) -> Dict:
-    if history_len < 4:
-        return {"thinkingConfig": {"thinkingLevel": "minimal"}}
-    elif history_len < 10:
-        return {"thinkingConfig": {"thinkingLevel": "low"}}
-    else:
-        return {"thinkingConfig": {"thinkingLevel": "medium"}}
-
-
-# ─────────────────────────────────────────────────────────────
-# KEY STATE TRACKING (نفس الكود السابق، بدون تغيير)
+# KEY STATE TRACKING
 # ─────────────────────────────────────────────────────────────
 @dataclass
 class KeyMetrics:
@@ -265,7 +252,7 @@ class SmartKeyOrchestrator:
 
 
 # ─────────────────────────────────────────────────────────────
-# SUPABASE CLIENT (محدث لاستخدام mood, metadata, users)
+# SUPABASE CLIENT (يدعم mood, metadata, users)
 # ─────────────────────────────────────────────────────────────
 class SupabaseClient:
     def __init__(self, client: httpx.AsyncClient):
@@ -278,7 +265,6 @@ class SupabaseClient:
         }
 
     async def get_history(self, user_id: str, limit: int = 10) -> List[Dict]:
-        """جلب آخر limit رسالة (10 لتوفير التوكينات)"""
         try:
             r = await self.client.get(
                 f"{SUPABASE_URL}/rest/v1/messages",
@@ -307,7 +293,6 @@ class SupabaseClient:
         mood: Optional[str] = None,
         metadata: Optional[Dict] = None,
     ):
-        """حفظ رسالة مع mood و metadata"""
         try:
             data = {
                 "user_id": user_id,
@@ -338,7 +323,6 @@ class SupabaseClient:
         current_mood: Optional[str] = None,
         metadata: Optional[Dict] = None,
     ):
-        """تحديث جدول users (آخر تفاعل + مزاج + بيانات إضافية)"""
         try:
             payload = {
                 "user_id": user_id,
@@ -349,7 +333,6 @@ class SupabaseClient:
             if metadata:
                 payload["metadata"] = metadata
 
-            # upsert: إذا كان المستخدم موجوداً يُحدّث، وإلا يُنشئ
             await self.client.post(
                 f"{SUPABASE_URL}/rest/v1/users",
                 headers=self.headers,
@@ -362,7 +345,7 @@ class SupabaseClient:
 
 
 # ─────────────────────────────────────────────────────────────
-# GEMINI CLIENT (مع تحسينات استهلاك التوكينات)
+# GEMINI CLIENT (متوافق مع Gemini 2.5 Flash)
 # ─────────────────────────────────────────────────────────────
 class GeminiClient:
     def __init__(self, client: httpx.AsyncClient, orchestrator: SmartKeyOrchestrator):
@@ -462,15 +445,15 @@ class GeminiClient:
         if not ks:
             raise HTTPException(503, "No keys available for generation")
 
-        thinking_cfg = get_thinking_config(len(messages))
-
-        # تحديد maxOutputTokens بشكل أكثر تحفظاً (200–400 للمحادثة العادية)
+        # تحديد maxOutputTokens بشكل معتدل
         MAX_OUTPUT_BASE = 400
         MAX_OUTPUT_LONG = 800
         output_cap = MAX_OUTPUT_LONG if len(messages) > 8 else MAX_OUTPUT_BASE
         max_output = min(output_cap, 65536 - total_input)
-        max_output = max(150, max_output)  # لا يقل عن 150
+        max_output = max(150, max_output)
 
+        # ── تعديل payload ليكون متوافقاً مع Gemini 2.5 Flash ──
+        # تمت إزالة thinkingConfig وتم تبسيط responseSchema
         payload = {
             "contents": contents,
             "systemInstruction": SYSTEM_INSTRUCTION,
@@ -481,12 +464,10 @@ class GeminiClient:
                 "responseSchema": {
                     "type": "object",
                     "properties": {
-                        "reply": {"type": "string"},
-                        "mood": {"type": "string", "enum": ["happy", "sad", "neutral", "funny"]}
+                        "reply": {"type": "string"}
                     },
                     "required": ["reply"]
-                },
-                **thinking_cfg,
+                }
             }
         }
 
@@ -537,10 +518,8 @@ class GeminiClient:
                 try:
                     result = json.loads(raw_text)
                     reply = result.get("reply", "").strip()
-                    mood = result.get("mood", "neutral")
                 except json.JSONDecodeError:
                     reply = raw_text.strip()
-                    mood = "neutral"
 
                 if not reply:
                     reply = "عذراً، ما قدرت نجاوبك الآن 🙏"
@@ -551,16 +530,18 @@ class GeminiClient:
                 actual_tokens = usage.get("totalTokenCount", total_input)
                 await self.orchestrator.report_success(ks, actual_tokens)
 
+                # mood غير موجود حالياً في الـ JSON، نعطيه قيمة افتراضية
+                mood = "neutral"
+
                 logger.info(
-                    f"✅ Key {key_id}… | thinking={thinking_cfg['thinkingConfig']['thinkingLevel']} | "
-                    f"tokens={actual_tokens} | mood={mood}"
+                    f"✅ Key {key_id}… | tokens={actual_tokens} | mood={mood}"
                 )
 
                 return {
                     "reply": reply,
                     "tokens_used": actual_tokens,
                     "thought_signature": thought_sig,
-                    "thinking_level": thinking_cfg["thinkingConfig"]["thinkingLevel"],
+                    "thinking_level": "none",   # لم نعد نستخدمه
                     "mood": mood,
                 }
 
@@ -649,7 +630,7 @@ async def lifespan(app: FastAPI):
     telegram = TelegramClient(http_client)
 
     asyncio.create_task(orchestrator.health_loop())
-    # تم إزالة health_check_keys – سنضيفها لاحقًا كـ Edge Function في Supabase
+    # health_check_keys مؤجلة (ستضاف لاحقاً كـ Edge Function)
 
     if RENDER_URL:
         webhook_url = f"{RENDER_URL}/webhook"
@@ -701,7 +682,7 @@ async def telegram_webhook(request: Request):
     await telegram.send_chat_action(chat_id)
 
     try:
-        history = await supabase.get_history(user_id, limit=10)  # 10 فقط لتوفير التوكينات
+        history = await supabase.get_history(user_id, limit=10)
         messages = history + [{"role": "user", "content": text, "thought_signature": None}]
 
         result = await gemini.generate_response(messages)
@@ -709,7 +690,7 @@ async def telegram_webhook(request: Request):
         # حفظ رسالة المستخدم
         await supabase.save_message(user_id, "user", text)
 
-        # حفظ رسالة البوت مع mood و metadata
+        # حفظ رسالة البوت مع metadata
         metadata = {
             "tokens_used": result["tokens_used"],
             "thinking_level": result["thinking_level"],
@@ -724,7 +705,7 @@ async def telegram_webhook(request: Request):
             metadata=metadata,
         )
 
-        # تحديث جدول users (آخر تفاعل + مزاج)
+        # تحديث جدول users
         await supabase.update_user(user_id, current_mood=result.get("mood"), metadata={"last_reply_tokens": result["tokens_used"]})
 
         await telegram.send_message(chat_id, result["reply"])
