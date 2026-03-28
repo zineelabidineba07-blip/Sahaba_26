@@ -14,7 +14,7 @@ GEMINI_KEYS = [v for k, v in os.environ.items() if k.startswith("GEMINI_KEY_") a
 if not GEMINI_KEYS:
     raise RuntimeError("No GEMINI_KEY_X provided")
 
-MODEL_NAME   = "gemini-3-flash-preview"
+MODEL_NAME   = "gemini-3.1-pro-preview"
 GEMINI_BASE  = "https://generativelanguage.googleapis.com/v1beta/models"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
@@ -25,15 +25,16 @@ WORKERS = 3
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot")
 
-SYSTEM_INSTRUCTION = {
-    "parts": [{"text": "رد مختصر باللهجة الجزائرية."}]
-}
+# ───────── SYSTEM (STATIC → CACHEABLE) ─────────
+SYSTEM_TEXT = "انتي بشرية.انتي اسمك سحابه.انتي تتكلمي باللهجة الجزائرية , ولكم مش ضروري. انتي عمرك 19 سنة. اظهري الحس البشري بدون مبالغة.استعملي الايموجيز بذكاء وبدون مبالغة."
+SYSTEM_INSTRUCTION = {"parts": [{"text": SYSTEM_TEXT}]}
 
 # ───────── GLOBALS ─────────
 queue = asyncio.Queue(MAX_QUEUE)
 seen_updates = set()
+context_cache = {}  # simple in-memory cache
 
-# ───────── KEY MANAGER (SMART) ─────────
+# ───────── KEY MANAGER ─────────
 class Key:
     def __init__(self, value):
         self.value = value
@@ -63,20 +64,66 @@ class KeyManager:
     async def success(self, key):
         key.fail = 0
 
-# ───────── GEMINI ─────────
+# ───────── GEMINI (TOKENS + CACHE + STRUCTURED) ─────────
 class Gemini:
     def __init__(self, client, km):
         self.client = client
         self.km = km
 
-    async def generate(self, text):
+    def thinking(self, length):
+        if length < 20:
+            return {"thinkingConfig": {"thinkingLevel": "minimal"}}
+        elif length < 100:
+            return {"thinkingConfig": {"thinkingLevel": "low"}}
+        return {"thinkingConfig": {"thinkingLevel": "medium"}}
+
+    async def count_tokens(self, contents, key):
         payload = {
-            "contents": [{"role": "user", "parts": [{"text": text}]}],
-            "systemInstruction": SYSTEM_INSTRUCTION,
+            "contents": contents,
+            "systemInstruction": SYSTEM_INSTRUCTION
         }
+        r = await self.client.post(
+            f"{GEMINI_BASE}/{MODEL_NAME}:countTokens",
+            headers={"x-goog-api-key": key},
+            json=payload,
+            timeout=10
+        )
+        if r.status_code == 200:
+            return r.json().get("totalTokens", 0)
+        return 0
+
+    async def generate(self, text):
+        # ─── CACHE HIT ───
+        if text in context_cache:
+            return context_cache[text]
+
+        contents = [{"role": "user", "parts": [{"text": text}]}]
 
         for _ in range(len(GEMINI_KEYS)):
             key = await self.km.get()
+
+            # ─── TOKEN AWARENESS ───
+            tokens = await self.count_tokens(contents, key.value)
+
+            max_output = max(512, min(2048, 8000 - tokens))
+
+            payload = {
+                "contents": contents,
+                "systemInstruction": SYSTEM_INSTRUCTION,
+                "generationConfig": {
+                    "temperature": 0.7,
+                    "maxOutputTokens": max_output,
+                    "responseMimeType": "application/json",
+                    "responseSchema": {
+                        "type": "object",
+                        "properties": {
+                            "reply": {"type": "string"}
+                        },
+                        "required": ["reply"]
+                    },
+                    **self.thinking(len(text))
+                }
+            }
 
             for attempt in range(3):
                 try:
@@ -89,9 +136,29 @@ class Gemini:
 
                     if r.status_code == 200:
                         data = r.json()
-                        text = self.extract(data)
+
+                        raw = ""
+                        parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                        for p in parts:
+                            if "text" in p:
+                                raw = p["text"]
+                                break
+
+                        try:
+                            parsed = json.loads(raw)
+                            reply = parsed.get("reply", "")
+                        except:
+                            reply = raw
+
+                        if not reply:
+                            reply = "ماقدرتش نجاوب درك"
+
+                        # ─── CACHE STORE ───
+                        if len(text) > 20:
+                            context_cache[text] = reply
+
                         await self.km.success(key)
-                        return text
+                        return reply
 
                     if r.status_code == 429 or r.status_code >= 500:
                         await self.km.fail(key, r.status_code)
@@ -107,23 +174,13 @@ class Gemini:
 
         raise HTTPException(503, "Gemini unavailable")
 
-    def extract(self, data):
-        try:
-            parts = data["candidates"][0]["content"]["parts"]
-            for p in parts:
-                if "text" in p:
-                    return p["text"]
-        except:
-            pass
-        return "ماقدرتش نجاوب درك"
-
 # ───────── TELEGRAM ─────────
 class Telegram:
     def __init__(self, client):
         self.client = client
 
     async def send(self, chat_id, text):
-        for i in range(2):
+        for _ in range(2):
             r = await self.client.post(
                 f"{TELEGRAM_API}/sendMessage",
                 json={"chat_id": chat_id, "text": text[:4000]},
@@ -132,7 +189,6 @@ class Telegram:
             if r.status_code == 200:
                 return
             await asyncio.sleep(1)
-        logger.error("Telegram send failed")
 
     async def typing(self, chat_id):
         try:
