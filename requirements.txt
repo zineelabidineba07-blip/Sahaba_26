@@ -1,12 +1,4 @@
-# Sahaba Bot — requirements.txt
-# Python 3.11+
-
-# Web framework
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
-
-# HTTP client (HTTP/2 enabled for Gemini API performance)
 httpx[http2]==0.28.1
-
-# Data validation
 pydantic==2.10.4
