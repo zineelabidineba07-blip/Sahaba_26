@@ -2,8 +2,9 @@ import os
 import asyncio
 import logging
 import httpx
+import json
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 
 # ───────── CONFIG ─────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
@@ -18,6 +19,8 @@ GEMINI_BASE  = "https://generativelanguage.googleapis.com/v1beta/models"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 MAX_INPUT_CHARS = 4000
+MAX_QUEUE = 100
+WORKERS = 3
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot")
@@ -26,20 +29,41 @@ SYSTEM_INSTRUCTION = {
     "parts": [{"text": "رد مختصر باللهجة الجزائرية."}]
 }
 
-# ───────── KEY MANAGER (ROUND-ROBIN) ─────────
+# ───────── GLOBALS ─────────
+queue = asyncio.Queue(MAX_QUEUE)
+seen_updates = set()
+
+# ───────── KEY MANAGER (SMART) ─────────
+class Key:
+    def __init__(self, value):
+        self.value = value
+        self.fail = 0
+        self.cooldown = 0
+
 class KeyManager:
     def __init__(self, keys):
-        self.keys = keys
-        self.index = 0
+        self.keys = [Key(k) for k in keys]
         self.lock = asyncio.Lock()
 
     async def get(self):
         async with self.lock:
-            key = self.keys[self.index]
-            self.index = (self.index + 1) % len(self.keys)
-            return key
+            now = asyncio.get_event_loop().time()
+            valid = [k for k in self.keys if k.cooldown <= now]
+            if not valid:
+                await asyncio.sleep(1)
+                return await self.get()
+            valid.sort(key=lambda k: k.fail)
+            return valid[0]
 
-# ───────── GEMINI (RETRY + FAILOVER) ─────────
+    async def fail(self, key, code):
+        key.fail += 1
+        if code == 429 or code >= 500:
+            key.cooldown = asyncio.get_event_loop().time() + min(30, 2 ** key.fail)
+
+    async def success(self, key):
+        key.fail = 0
+
+# ───────── GEMINI ─────────
 class Gemini:
     def __init__(self, client, km):
         self.client = client
@@ -58,26 +82,40 @@ class Gemini:
                 try:
                     r = await self.client.post(
                         f"{GEMINI_BASE}/{MODEL_NAME}:generateContent",
-                        headers={"x-goog-api-key": key},
+                        headers={"x-goog-api-key": key.value},
                         json=payload,
-                        timeout=20
+                        timeout=15
                     )
 
                     if r.status_code == 200:
                         data = r.json()
-                        return data["candidates"][0]["content"]["parts"][0]["text"]
+                        text = self.extract(data)
+                        await self.km.success(key)
+                        return text
 
-                    if r.status_code >= 500:
+                    if r.status_code == 429 or r.status_code >= 500:
+                        await self.km.fail(key, r.status_code)
                         await asyncio.sleep(2 ** attempt)
                         continue
 
                     if r.status_code in (401, 403):
+                        await self.km.fail(key, r.status_code)
                         break
 
                 except Exception:
                     await asyncio.sleep(2 ** attempt)
 
-        return "عندي ضغط شوية، عاود بعد لحظة 🙏"
+        raise HTTPException(503, "Gemini unavailable")
+
+    def extract(self, data):
+        try:
+            parts = data["candidates"][0]["content"]["parts"]
+            for p in parts:
+                if "text" in p:
+                    return p["text"]
+        except:
+            pass
+        return "ماقدرتش نجاوب درك"
 
 # ───────── TELEGRAM ─────────
 class Telegram:
@@ -85,11 +123,16 @@ class Telegram:
         self.client = client
 
     async def send(self, chat_id, text):
-        await self.client.post(
-            f"{TELEGRAM_API}/sendMessage",
-            json={"chat_id": chat_id, "text": text},
-            timeout=10
-        )
+        for i in range(2):
+            r = await self.client.post(
+                f"{TELEGRAM_API}/sendMessage",
+                json={"chat_id": chat_id, "text": text[:4000]},
+                timeout=10
+            )
+            if r.status_code == 200:
+                return
+            await asyncio.sleep(1)
+        logger.error("Telegram send failed")
 
     async def typing(self, chat_id):
         try:
@@ -107,6 +150,18 @@ class Telegram:
             json={"url": f"{RENDER_URL}/webhook"},
         )
 
+# ───────── WORKER ─────────
+async def worker():
+    while True:
+        chat_id, text = await queue.get()
+        try:
+            await telegram.typing(chat_id)
+            reply = await gemini.generate(text)
+            await telegram.send(chat_id, reply)
+        except Exception:
+            await telegram.send(chat_id, "خطأ مؤقت")
+        queue.task_done()
+
 # ───────── APP ─────────
 app = FastAPI()
 
@@ -118,34 +173,34 @@ km = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global http, gemini, telegram, km
-    http = httpx.AsyncClient()
+    limits = httpx.Limits(max_connections=100, max_keepalive_connections=20)
+    http = httpx.AsyncClient(limits=limits)
+
     km = KeyManager(GEMINI_KEYS)
     gemini = Gemini(http, km)
     telegram = Telegram(http)
 
     await telegram.webhook()
+
+    for _ in range(WORKERS):
+        asyncio.create_task(worker())
+
     yield
     await http.aclose()
 
 app.router.lifespan_context = lifespan
 
-# ───────── NON-BLOCKING PROCESSOR ─────────
-async def process_message(chat_id, text):
-    await telegram.typing(chat_id)
-
-    try:
-        reply = await gemini.generate(text)
-    except Exception:
-        reply = "خطأ مؤقت"
-
-    await telegram.send(chat_id, reply)
-
-# ───────── WEBHOOK (FAST RETURN) ─────────
+# ───────── WEBHOOK ─────────
 @app.post("/webhook")
 async def webhook(req: Request):
     data = await req.json()
-    msg = data.get("message")
+    update_id = data.get("update_id")
 
+    if update_id in seen_updates:
+        return {"ok": True}
+    seen_updates.add(update_id)
+
+    msg = data.get("message")
     if not msg:
         return {"ok": True}
 
@@ -155,8 +210,10 @@ async def webhook(req: Request):
     if not text:
         return {"ok": True}
 
-    asyncio.create_task(process_message(chat_id, text))
+    if queue.full():
+        return {"ok": True}
 
+    await queue.put((chat_id, text))
     return {"ok": True}
 
 # ───────── HEALTH ─────────
