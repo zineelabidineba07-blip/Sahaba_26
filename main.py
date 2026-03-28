@@ -435,8 +435,14 @@ class GeminiClient:
         will be underestimated.
         """
         try:
+            # countTokens does not accept thoughtSignature parts — strip them
+            clean_contents = []
+            for c in contents:
+                clean_parts = [p for p in c.get("parts", []) if "thoughtSignature" not in p]
+                clean_contents.append({"role": c["role"], "parts": clean_parts})
+
             payload = {
-                "contents":          contents,
+                "contents":          clean_contents,
                 "systemInstruction": SYSTEM_INSTRUCTION,
             }
             r = await self.client.post(
