@@ -700,6 +700,23 @@ http_client:  Optional[httpx.AsyncClient]    = None
 
 RENDER_URL = os.environ.get("RENDER_URL", "")   # e.g. https://sahaba.onrender.com
 
+async def keep_alive_loop():
+    """
+    Pings our own /health every 10 minutes to prevent Render free plan
+    from putting the service to sleep (sleeps after 15min inactivity).
+    """
+    await asyncio.sleep(60)  # wait for full startup first
+    while True:
+        try:
+            if RENDER_URL:
+                async with httpx.AsyncClient(timeout=10.0) as c:
+                    r = await c.get(f"{RENDER_URL}/health")
+                    logger.info(f"💓 Keep-alive ping → {r.status_code}")
+        except Exception as e:
+            logger.warning(f"💓 Keep-alive failed: {e}")
+        await asyncio.sleep(62)  # every 10 minutes
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global http_client, orchestrator, supabase, gemini, telegram
@@ -711,6 +728,7 @@ async def lifespan(app: FastAPI):
     telegram     = TelegramClient(http_client)
 
     asyncio.create_task(orchestrator.health_loop())
+    asyncio.create_task(keep_alive_loop())
 
     # Auto-register webhook if RENDER_URL is set
     if RENDER_URL:
