@@ -183,7 +183,7 @@ class KeyState:
             self.status = "cooling"
             logger.warning(f"🔑 Key {self.key_id[:8]}… rate-limited — cooling {cooldown:.0f}s")
         elif status_code == 403:
-            self.cooldown_until = now + 3600
+            self.cooldown_until = now + 1800
             self.status = "cooling"
             logger.error(f"🔑 Key {self.key_id[:8]}… suspended (403) → cooling 1h")
         elif status_code >= 500:
