@@ -46,7 +46,7 @@ logger.info(f"✅ {len(GEMINI_KEYS)} Gemini key(s) loaded")
 # ─── Model (Official Google AI — gemini-3-flash-preview) ───
 # Source: https://ai.google.dev/gemini-api/docs/models/gemini-3-flash-preview
 # Input limit: 1,048,576 tokens | Output limit: 65,536 tokens
-MODEL_NAME   = "gemini-3-flash-preview"
+MODEL_NAME   = "gemini-2.5-flash"
 GEMINI_BASE  = "https://generativelanguage.googleapis.com/v1beta/models"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
