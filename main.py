@@ -15,10 +15,14 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("sahaba_bot")
+# Keep httpx/uvicorn less noisy
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").setLevel(logging.INFO)
 
 # ─────────────────────────────────────────────────────────────
 # CONFIGURATION
@@ -660,7 +664,7 @@ class TelegramClient:
                 json={
                     "url":             url,
                     "allowed_updates": ["message"],
-                    "drop_pending_updates": True,
+                    "drop_pending_updates": False,  # keep msgs during restarts
                 },
                 timeout=10.0,
             )
@@ -735,58 +739,88 @@ app = FastAPI(
 # ─────────────────────────────────────────────────────────────
 @app.post("/webhook/{secret}")
 async def telegram_webhook(secret: str, request: Request):
+    # Read raw body first for maximum debug visibility
+    try:
+        raw_body = await request.body()
+        logger.info(f"📥 Webhook | secret_match={secret == WEBHOOK_SECRET} | bytes={len(raw_body)}")
+    except Exception as e:
+        logger.error(f"❌ body read error: {e}")
+        return {"ok": True}
+
     if secret != WEBHOOK_SECRET:
+        logger.error(f"❌ Wrong secret received: [{secret}]")
         raise HTTPException(403, "Invalid secret")
 
     try:
-        update = await request.json()
-    except Exception:
+        import json as _json
+        update = _json.loads(raw_body)
+    except Exception as e:
+        logger.error(f"❌ JSON parse failed: {e} | raw={raw_body[:100]}")
         return {"ok": True}
+
+    logger.info(f"📨 Update received | keys={list(update.keys())} | update_id={update.get('update_id')}")
 
     message = update.get("message", {})
     if not message:
+        logger.info(f"⏭️ No message field | update_id={update.get('update_id')}")
         return {"ok": True}
 
     chat_id  = message.get("chat", {}).get("id")
-    text     = message.get("text", "").strip()
+    text     = (message.get("text") or "").strip()
     user_id  = str(message.get("from", {}).get("id", ""))
+    username = message.get("from", {}).get("username", "unknown")
 
-    if not chat_id or not text or not user_id:
+    logger.info(f"💬 msg | user={user_id} @{username} | chat={chat_id} | text=[{text[:80]}]")
+
+    if not chat_id or not user_id:
+        logger.warning("⚠️ Missing chat_id or user_id")
         return {"ok": True}
 
-    # Ignore non-text messages (stickers, photos, etc.)
-    if not isinstance(text, str) or len(text) == 0:
+    # Skip non-text (stickers, photos, etc.)
+    if not text:
+        logger.info(f"⏭️ No text | msg_keys={list(message.keys())}")
+        return {"ok": True}
+
+    # Handle /start command
+    if text.startswith("/start"):
+        await telegram.send_message(
+            chat_id,
+            "واش راك؟ أنا سحابة 🌥️\nكلمني بالعربي، الدارجة، أو حتى arabizi — أنا هنا!"
+        )
         return {"ok": True}
 
     # Show typing indicator
     await telegram.send_chat_action(chat_id)
 
     try:
-        # Load history (includes thought signatures from DB)
+        logger.info(f"📚 Fetching history for user={user_id}…")
         history  = await supabase.get_history(user_id, limit=20)
+        logger.info(f"📚 History: {len(history)} message(s)")
+
         messages = history + [{"role": "user", "content": text, "thought_signature": None}]
 
+        logger.info(f"🤖 Calling Gemini for user={user_id}…")
         result = await gemini.generate_response(messages)
+        logger.info(f"✅ Gemini replied | tokens={result['tokens_used']} | thinking={result['thinking_level']}")
 
-        # Save both turns with thought signature
-        await supabase.save_message(user_id, "user",      text)
+        # Save both turns
+        await supabase.save_message(user_id, "user", text)
         await supabase.save_message(
             user_id, "assistant", result["reply"],
             thought_signature=result.get("thought_signature"),
         )
 
-        await telegram.send_message(chat_id, result["reply"])
-
-        logger.info(
-            f"💬 user={user_id} | tokens={result['tokens_used']} | "
-            f"thinking={result['thinking_level']}"
-        )
+        sent = await telegram.send_message(chat_id, result["reply"])
+        if sent:
+            logger.info(f"💬 Reply sent | user={user_id}")
+        else:
+            logger.error(f"❌ Failed to send reply to user={user_id}")
 
     except HTTPException as e:
-        logger.error(f"HTTP {e.status_code}: {e.detail}")
+        logger.error(f"❌ HTTPException {e.status_code}: {e.detail}")
         await telegram.send_message(chat_id, "عندي مشكلة تقنية دروك، جرب بعد شوية 🙏")
     except Exception as e:
-        logger.error(f"Webhook handler error: {e}")
+        logger.error(f"❌ Webhook handler error: {type(e).__name__}: {e}", exc_info=True)
         await telegram.send_message(chat_id, "راني نحل مشكلة، عاود بعد لحظة ⚙️")
 
     return {"ok": True}
