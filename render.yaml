@@ -3,11 +3,8 @@ services:
     name: sahaba-bot
     runtime: docker
     dockerfilePath: ./Dockerfile
-    plan: starter        # تم التغيير من free إلى starter لضمان التشغيل الدائم
-
-    # Health check — Render pings this to confirm the service is live
+    plan: free
     healthCheckPath: /health
-
     envVars:
       - key: TELEGRAM_TOKEN
         sync: false
@@ -16,5 +13,6 @@ services:
       - key: SUPABASE_KEY
         sync: false
       - key: RENDER_URL
-        sync: false          # مثال: https://sahaba-bot.onrender.com
-      # ملاحظة: تم حذف WEBHOOK_SECRET بناءً على طلبك
+        sync: false
+      - key: GEMINI_KEY_1
+        sync: false
