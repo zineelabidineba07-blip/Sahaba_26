@@ -442,8 +442,7 @@ class GeminiClient:
                 clean_contents.append({"role": c["role"], "parts": clean_parts})
 
             payload = {
-                "contents":          clean_contents,
-                "systemInstruction": SYSTEM_INSTRUCTION,
+                "contents": clean_contents,
             }
             r = await self.client.post(
                 f"{GEMINI_BASE}/{MODEL_NAME}:countTokens",
@@ -484,12 +483,13 @@ class GeminiClient:
         if not ks:
             raise HTTPException(503, "No keys available")
 
+        count_key = ks.key  # remember which key did countTokens
         exact_tokens = await self.count_tokens(contents, ks.key)
-        total_input  = exact_tokens  # already includes system instruction
+        total_input  = exact_tokens
         self.orchestrator.release_reservation(ks, reservation_count)
 
         # ── Step 2: Get best key for generation ──────────────
-        gen_reservation = total_input + 800  # generous output buffer
+        gen_reservation = total_input + 800
         ks = await self.orchestrator.get_best_key(gen_reservation)
         if not ks:
             raise HTTPException(503, "No keys available for generation")
