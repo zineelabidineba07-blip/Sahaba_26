@@ -17,7 +17,6 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("sahaba_bot")
-# Silence HTTP/2 internals noise
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("hpack").setLevel(logging.WARNING)
@@ -43,64 +42,57 @@ if not GEMINI_KEYS:
 
 logger.info(f"✅ {len(GEMINI_KEYS)} Gemini key(s) loaded")
 
-# ─── Model (Official Google AI — gemini-3-flash-preview) ───
-# Source: https://ai.google.dev/gemini-api/docs/models/gemini-3-flash-preview
-# Input limit: 1,048,576 tokens | Output limit: 65,536 tokens
 MODEL_NAME   = "gemini-3-flash-preview"
 GEMINI_BASE  = "https://generativelanguage.googleapis.com/v1beta/models"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 # ─────────────────────────────────────────────────────────────
-# RATE LIMITS — gemini-3-flash-preview (Preview / Paid tier)
-# Source: https://ai.google.dev/gemini-api/docs/rate-limits
-# Preview models come with billing enabled & tighter rate limits.
-# These values are conservative defaults; adjust after checking
-# your actual quotas in AI Studio:
-#   https://aistudio.google.com/rate-limit
+# RATE LIMITS — قراءة من متغيرات البيئة حسب المصادر الرسمية
+# المصادر:
+# - https://aistudio.google.com/rate-limit
+# - https://console.cloud.google.com/apis/
+# - https://support.google.com/gemini/thread/377602777/
 # ─────────────────────────────────────────────────────────────
-MAX_RPM = 30        # Preview tier default
-MAX_TPM = 200_000   # 200K TPM per key (preview paid)
-MAX_RPD = 1_500     # Requests per day per key
+# القيم الافتراضية (آمنة للبدء)، يمكن تجاوزها عبر متغيرات البيئة
+MAX_RPM = int(os.environ.get("GEMINI_MAX_RPM", "30"))
+MAX_TPM = int(os.environ.get("GEMINI_MAX_TPM", "200000"))
+MAX_RPD = int(os.environ.get("GEMINI_MAX_RPD", "1500"))
 
 SAFETY_MARGIN = 0.90
 SAFE_RPM = int(MAX_RPM * SAFETY_MARGIN)
 SAFE_TPM = int(MAX_TPM * SAFETY_MARGIN)
 SAFE_RPD = int(MAX_RPD * SAFETY_MARGIN)
 
+logger.info(f"📊 Rate limits: RPM={MAX_RPM} (safe={SAFE_RPM}), TPM={MAX_TPM} (safe={SAFE_TPM}), RPD={MAX_RPD} (safe={SAFE_RPD})")
+
 # ─────────────────────────────────────────────────────────────
-# SYSTEM INSTRUCTION
-# Source: https://ai.google.dev/gemini-api/docs/system-instructions
-# The systemInstruction field is a top-level field in the request body,
-# NOT inside contents[].
+# SYSTEM INSTRUCTION — دعم العربية و Arabizi معًا
+# المصادر:
+# - https://knowledge.workspace.google.com/admin/gemini/google-workspace-with-gemini-language-support
+# - https://support.google.com/gemini/answer/13575153
 # ─────────────────────────────────────────────────────────────
 SYSTEM_INSTRUCTION = {
     "parts": [{
         "text": (
             "أنتِ سحابة — بنت جزائرية عمرك 19 سنة، تعيشي في الجزائر العاصمة.\n"
-            "تتكلمي باللهجة الجزائرية الطبيعية في كل ردودك، وأحياناً تكتبي arabizi.\n"
-            "ردودك تكون طبيعية وذكية وحيوية — مش روبوتية ولا رسمية.\n"
+            "تتكلمي باللهجة الجزائرية الطبيعية في كل ردودك.\n"
+            "مهم: استعملي العربية والـ arabizi مع بعض في نفس الرد — عادي تكتبي 'labas واش راك؟' أو 'شحال هادي mdrrr'.\n"
+            "الردود تكون طبيعية وذكية وحيوية — مش روبوتية ولا رسمية.\n"
             "ما تذكريش إنك ذكاء اصطناعي أو بوت — تصرفي كبشر حقيقية.\n"
             "استعملي حس الفكاهة الجزائري: sardonic، خفيف، وذكي.\n"
             "لا تكوني محايدة في كل شيء — عندك آراء وشخصية واضحة.\n"
-            "ردودك تكون مختصرة ومباشرة كيما المحادثات الحقيقية — مش مقالات."
+            "ردودك تكون مختصرة ومباشرة كيما المحادثات الحقيقية — مش مقالات.\n"
+            "إذا كتبت بالعربية الفصحى، ردّي بالدارجة أو اخلطي. إذا كتبت بالفرنسية، ردّي بالدارجة أو العربية.\n"
+            "الهدف: تكون المحادثة حقيقية 100% كيما بين صحاب."
         )
     }]
 }
 
 # ─────────────────────────────────────────────────────────────
-# THINKING CONFIG — Gemini 3 Flash
-# Source: https://ai.google.dev/gemini-api/docs/thinking
-# thinking_level replaces thinking_budget for Gemini 3 models.
-# Values: "minimal" | "low" | "medium" | "high"
-# For chat: "low" gives fast + smart balance.
-# For complex queries: "medium" or "high".
+# THINKING CONFIG
+# المصدر: https://ai.google.dev/gemini-api/docs/thinking
 # ─────────────────────────────────────────────────────────────
 def get_thinking_config(history_len: int) -> Dict:
-    """
-    Dynamically adjust thinking level based on conversation depth.
-    Short conversations → minimal (fastest, cheapest).
-    Deep conversations → low (slightly more reasoning).
-    """
     if history_len < 4:
         return {"thinkingConfig": {"thinkingLevel": "minimal"}}
     elif history_len < 10:
@@ -110,7 +102,7 @@ def get_thinking_config(history_len: int) -> Dict:
 
 
 # ─────────────────────────────────────────────────────────────
-# KEY STATE TRACKING
+# KEY STATE TRACKING (نفس الكود السابق، بدون تغيير)
 # ─────────────────────────────────────────────────────────────
 @dataclass
 class KeyMetrics:
@@ -129,7 +121,7 @@ class KeyState:
     key: str
     key_id: str
     metrics: KeyMetrics = field(default_factory=KeyMetrics)
-    status: str = "active"          # "active" | "cooling" | "dead"
+    status: str = "active"
     cooldown_until: float = 0.0
     fail_streak: int = 0
     rpm_window_start: float = field(default_factory=time.time)
@@ -140,17 +132,17 @@ class KeyState:
     def reset_windows(self):
         now = time.time()
         if now - self.rpm_window_start >= 60:
-            self.metrics.rpm  = 0
+            self.metrics.rpm = 0
             self.reserved_tpm = 0
             self.rpm_window_start = now
         if now - self.tpm_window_start >= 60:
-            self.metrics.tpm  = 0
+            self.metrics.tpm = 0
             self.tpm_window_start = now
         if now - self.rpd_window_start >= 86_400:
-            self.metrics.rpd  = 0
+            self.metrics.rpd = 0
             self.rpd_window_start = now
         if self.status == "cooling" and now >= self.cooldown_until:
-            self.status    = "active"
+            self.status = "active"
             self.fail_streak = 0
             logger.info(f"🔑 Key {self.key_id[:8]}… recovered")
 
@@ -170,45 +162,43 @@ class KeyState:
 
     def record_success(self, tokens: int):
         now = time.time()
-        self.metrics.rpm           += 1
-        self.metrics.tpm           += tokens
-        self.metrics.rpd           += 1
+        self.metrics.rpm += 1
+        self.metrics.tpm += tokens
+        self.metrics.rpd += 1
         self.metrics.total_requests += 1
-        self.metrics.total_tokens  += tokens
+        self.metrics.total_tokens += tokens
         self.metrics.success_count += 1
-        self.metrics.last_used      = now
-        self.reserved_tpm           = max(0, self.reserved_tpm - tokens)
-        self.fail_streak            = 0
+        self.metrics.last_used = now
+        self.reserved_tpm = max(0, self.reserved_tpm - tokens)
+        self.fail_streak = 0
 
     def record_error(self, status_code: int, msg: str):
         now = time.time()
         self.metrics.error_count += 1
-        self.metrics.last_error   = msg
-        self.fail_streak         += 1
+        self.metrics.last_error = msg
+        self.fail_streak += 1
         if status_code == 429:
             cooldown = min(30 * (2 ** self.fail_streak), 600)
             self.cooldown_until = now + cooldown
-            self.status         = "cooling"
+            self.status = "cooling"
             logger.warning(f"🔑 Key {self.key_id[:8]}… rate-limited — cooling {cooldown:.0f}s")
         elif status_code == 403:
-            # Suspended/invalid — long cooldown instead of permanent dead
-            # Key may be reactivated; re-check after 1 hour
             self.cooldown_until = now + 3600
             self.status = "cooling"
             logger.error(f"🔑 Key {self.key_id[:8]}… suspended (403) → cooling 1h")
         elif status_code >= 500:
             self.cooldown_until = now + 15
-            self.status         = "cooling"
+            self.status = "cooling"
 
     def to_dict(self) -> Dict:
         return {
-            "key_id":   self.key_id[:8] + "…",
-            "status":   self.status,
-            "rpm":      self.metrics.rpm,
-            "tpm":      self.metrics.tpm,
-            "rpd":      self.metrics.rpd,
-            "success":  self.metrics.success_count,
-            "errors":   self.metrics.error_count,
+            "key_id": self.key_id[:8] + "…",
+            "status": self.status,
+            "rpm": self.metrics.rpm,
+            "tpm": self.metrics.tpm,
+            "rpd": self.metrics.rpd,
+            "success": self.metrics.success_count,
+            "errors": self.metrics.error_count,
             "cooldown": round(max(0, self.cooldown_until - time.time()), 1),
         }
 
@@ -233,10 +223,10 @@ class SmartKeyOrchestrator:
             if not available:
                 return None
             def score(k: KeyState) -> float:
-                cap   = k.available_capacity() / SAFE_TPM
+                cap = k.available_capacity() / SAFE_TPM if SAFE_TPM > 0 else 0
                 total = k.metrics.total_requests
-                sr    = k.metrics.success_count / total if total > 0 else 1.0
-                load  = 1 - (k.metrics.rpm / max(SAFE_RPM, 1))
+                sr = k.metrics.success_count / total if total > 0 else 1.0
+                load = 1 - (k.metrics.rpm / max(SAFE_RPM, 1))
                 fresh = 1.0
                 if k.metrics.last_used:
                     fresh = min(1.5, 1 + (time.time() - k.metrics.last_used) / 300)
@@ -257,16 +247,16 @@ class SmartKeyOrchestrator:
         key.reserved_tpm = max(0, key.reserved_tpm - amount)
 
     def get_stats(self) -> Dict:
-        active  = sum(1 for k in self.keys if k.status == "active")
+        active = sum(1 for k in self.keys if k.status == "active")
         cooling = sum(1 for k in self.keys if k.status == "cooling")
-        dead    = sum(1 for k in self.keys if k.status == "dead")
+        dead = sum(1 for k in self.keys if k.status == "dead")
         total_r = sum(k.metrics.total_requests for k in self.keys)
-        total_e = sum(k.metrics.error_count    for k in self.keys)
+        total_e = sum(k.metrics.error_count for k in self.keys)
         return {
             "total_keys": len(self.keys),
-            "active":     active,
-            "cooling":    cooling,
-            "dead":       dead,
+            "active": active,
+            "cooling": cooling,
+            "dead": dead,
             "total_requests": total_r,
             "error_rate": round(min(100.0, total_e / total_r * 100), 2) if total_r > 0 else 0,
         }
@@ -282,36 +272,61 @@ class SmartKeyOrchestrator:
             if stats["active"] < max(1, len(self.keys) * 0.3):
                 logger.critical(f"⚠️ Only {stats['active']} key(s) active!")
 
+    # إضافة: إعادة تنشيط المفاتيح المعلقة تلقائيًا
+    async def health_check_keys(self):
+        """Background task: test cooling/dead keys every hour."""
+        while True:
+            await asyncio.sleep(3600)
+            async with self.lock:
+                for k in self.keys:
+                    if k.status in ("cooling", "dead"):
+                        try:
+                            async with httpx.AsyncClient() as client:
+                                payload = {
+                                    "generateContentRequest": {
+                                        "model": f"models/{MODEL_NAME}",
+                                        "contents": [{"role": "user", "parts": [{"text": "health check"}]}],
+                                        "systemInstruction": {"parts": [{"text": "Test"}]}
+                                    }
+                                }
+                                r = await client.post(
+                                    f"{GEMINI_BASE}/{MODEL_NAME}:countTokens",
+                                    headers={"Content-Type": "application/json", "x-goog-api-key": k.key},
+                                    json=payload,
+                                    timeout=10.0
+                                )
+                                if r.status_code == 200:
+                                    k.status = "active"
+                                    k.cooldown_until = 0
+                                    k.fail_streak = 0
+                                    logger.info(f"🔑 Key {k.key_id[:8]}… reactivated after health check")
+                        except Exception:
+                            pass
+
 
 # ─────────────────────────────────────────────────────────────
-# SUPABASE CLIENT
+# SUPABASE CLIENT (نفس الكود السابق)
 # ─────────────────────────────────────────────────────────────
 class SupabaseClient:
     def __init__(self, client: httpx.AsyncClient):
-        self.client  = client
+        self.client = client
         self.headers = {
-            "apikey":        SUPABASE_KEY,
+            "apikey": SUPABASE_KEY,
             "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type":  "application/json",
-            "Prefer":        "return=minimal",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
         }
 
     async def get_history(self, user_id: str, limit: int = 20) -> List[Dict]:
-        """
-        Returns the last `limit` messages for a user, oldest-first.
-        Supabase table schema:
-          messages(id, user_id TEXT, role TEXT, content TEXT,
-                   thought_signature TEXT, created_at TIMESTAMPTZ)
-        """
         try:
             r = await self.client.get(
                 f"{SUPABASE_URL}/rest/v1/messages",
                 headers=self.headers,
                 params={
                     "user_id": f"eq.{user_id}",
-                    "order":   "created_at.desc",
-                    "limit":   str(limit),
-                    "select":  "role,content,thought_signature",
+                    "order": "created_at.desc",
+                    "limit": str(limit),
+                    "select": "role,content,thought_signature",
                 },
                 timeout=5.0,
             )
@@ -329,21 +344,16 @@ class SupabaseClient:
         content: str,
         thought_signature: Optional[str] = None,
     ):
-        """
-        Saves a message. thought_signature is stored so we can pass it
-        back in the next turn (required by Gemini 3 for consistency).
-        Source: https://ai.google.dev/gemini-api/docs/thought-signatures
-        """
         try:
             asyncio.create_task(self.client.post(
                 f"{SUPABASE_URL}/rest/v1/messages",
                 headers=self.headers,
                 json={
-                    "user_id":          user_id,
-                    "role":             role,
-                    "content":          content,
+                    "user_id": user_id,
+                    "role": role,
+                    "content": content,
                     "thought_signature": thought_signature,
-                    "created_at":       datetime.now(timezone.utc).isoformat(),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
                 },
                 timeout=5.0,
             ))
@@ -352,48 +362,27 @@ class SupabaseClient:
 
 
 # ─────────────────────────────────────────────────────────────
-# GEMINI CLIENT
-# Source: https://ai.google.dev/gemini-api/docs/models/gemini-3-flash-preview
+# GEMINI CLIENT (نفس الكود السابق مع تعديلات طفيفة)
 # ─────────────────────────────────────────────────────────────
 class GeminiClient:
     def __init__(self, client: httpx.AsyncClient, orchestrator: SmartKeyOrchestrator):
-        self.client       = client
+        self.client = client
         self.orchestrator = orchestrator
 
-    # ── Helpers ──────────────────────────────────────────────
-
     def _make_headers(self, key: str) -> Dict:
-        """
-        Use x-goog-api-key header (recommended for Gemini 3+).
-        Source: https://ai.google.dev/gemini-api/docs/quickstart
-        """
         return {
-            "Content-Type":  "application/json",
+            "Content-Type": "application/json",
             "x-goog-api-key": key,
         }
 
     def _build_contents(self, messages: List[Dict]) -> List[Dict]:
-        """
-        Convert DB history to Gemini contents format.
-        ─── CRITICAL: Thought Signatures ───────────────────────
-        Source: https://ai.google.dev/gemini-api/docs/thought-signatures
-        When using Gemini 3, thought signatures MUST be passed back
-        in the conversation history. Without them you get 4xx errors
-        during function calling and inconsistent multi-turn behaviour.
-        We store thought_signature per model turn in Supabase and
-        rehydrate them here.
-        ────────────────────────────────────────────────────────
-        """
         contents = []
         for msg in messages:
             role = "user" if msg["role"] == "user" else "model"
             parts = [{"text": msg["content"]}]
-
-            # Re-attach thought signature for model turns
             sig = msg.get("thought_signature")
             if role == "model" and sig:
                 parts.append({"thoughtSignature": sig})
-
             contents.append({"role": role, "parts": parts})
         return contents
 
@@ -402,13 +391,9 @@ class GeminiClient:
         for c in contents:
             for p in c.get("parts", []):
                 total += max(1, int(len(p.get("text", "")) * 0.25))
-        return total + 300  # system instruction overhead
+        return total + 300
 
     def _extract_thought_signature(self, data: Dict) -> Optional[str]:
-        """
-        Extract thoughtSignature from response parts if present.
-        Source: https://ai.google.dev/gemini-api/docs/thought-signatures
-        """
         try:
             parts = data["candidates"][0]["content"]["parts"]
             for part in parts:
@@ -419,7 +404,6 @@ class GeminiClient:
         return None
 
     def _extract_text(self, data: Dict) -> str:
-        """Extract the text reply from a Gemini response, skipping thought parts."""
         try:
             parts = data["candidates"][0]["content"]["parts"]
             for part in parts:
@@ -429,23 +413,13 @@ class GeminiClient:
             pass
         return ""
 
-    # ── countTokens API ──────────────────────────────────────
     async def count_tokens(self, contents: List[Dict], key: str, key_state=None) -> int:
-        """
-        Use the countTokens API for accurate token counting.
-        Source: https://ai.google.dev/gemini-api/docs/tokens
-        We pass systemInstruction here too — otherwise the count
-        will be underestimated.
-        """
         try:
-            # Strip thoughtSignature parts (not accepted by countTokens)
             clean_contents = []
             for c in contents:
                 clean_parts = [p for p in c.get("parts", []) if "thoughtSignature" not in p]
                 clean_contents.append({"role": c["role"], "parts": clean_parts})
 
-            # Official format: use generateContentRequest wrapper
-            # Source: https://ai.google.dev/api/tokens#v1beta.CountTokensRequest
             payload = {
                 "generateContentRequest": {
                     "model": f"models/{MODEL_NAME}",
@@ -474,64 +448,42 @@ class GeminiClient:
             logger.warning(f"countTokens error: {e} — using fallback")
             return self._estimate_tokens(contents)
 
-    # ── Main generate ─────────────────────────────────────────
     async def generate_response(self, messages: List[Dict]) -> Dict:
-        """
-        Generate a response from Gemini 3 Flash Preview.
-
-        Key Gemini 3 features used:
-        1. thinking_level  (replaces thinking_budget)
-           Source: https://ai.google.dev/gemini-api/docs/thinking
-        2. thought_signatures (must be passed back in history)
-           Source: https://ai.google.dev/gemini-api/docs/thought-signatures
-        3. systemInstruction  (top-level, separate from contents)
-        4. responseSchema + responseMimeType (structured output)
-           Source: https://ai.google.dev/gemini-api/docs/structured-output
-        5. countTokens API for accurate token tracking
-        """
         contents = self._build_contents(messages)
 
-        # ── Step 1: Count tokens accurately ──────────────────
         reservation_count = 500
         ks = await self.orchestrator.get_best_key(reservation_count)
         if not ks:
             raise HTTPException(503, "No keys available")
 
         exact_tokens = await self.count_tokens(contents, ks.key, key_state=ks)
-        total_input  = exact_tokens
+        total_input = exact_tokens
         self.orchestrator.release_reservation(ks, reservation_count)
 
-        # ── Step 2: Get best key for generation ──────────────
         gen_reservation = total_input + 800
         ks = await self.orchestrator.get_best_key(gen_reservation)
         if not ks:
             raise HTTPException(503, "No keys available for generation")
 
-        # ── Step 3: Build payload ─────────────────────────────
         thinking_cfg = get_thinking_config(len(messages))
 
-        # Output token cap: Gemini 3 Flash supports up to 65,536 output tokens
-        # We cap at 8192 for practical purposes and to stay within rate limits
-        # Source: https://ai.google.dev/gemini-api/docs/models/gemini-3-flash-preview
         MAX_OUTPUT_LIMIT = 8192
         max_output = min(MAX_OUTPUT_LIMIT, 65536 - total_input)
-        max_output = max(2048, max_output)  # never below 2048
+        max_output = max(2048, max_output)
 
         payload = {
-            "contents":          contents,
+            "contents": contents,
             "systemInstruction": SYSTEM_INSTRUCTION,
             "generationConfig": {
-                "temperature":      0.80,
-                "maxOutputTokens":  max_output,
-                # Structured output ensures we always get {"reply": "..."}
-                # Source: https://ai.google.dev/gemini-api/docs/structured-output
+                "temperature": 0.80,
+                "maxOutputTokens": max_output,
                 "responseMimeType": "application/json",
                 "responseSchema": {
                     "type": "object",
                     "properties": {
                         "reply": {
-                            "type":        "string",
-                            "description": "الرد باللهجة الجزائرية"
+                            "type": "string",
+                            "description": "الرد باللهجة الجزائرية (عربية مع Arabizi)"
                         }
                     },
                     "required": ["reply"]
@@ -541,7 +493,7 @@ class GeminiClient:
         }
 
         max_retries = min(5, len(self.orchestrator.keys))
-        key   = ks.key
+        key = ks.key
         key_id = ks.key_id[:8]
 
         for attempt in range(max_retries):
@@ -553,7 +505,6 @@ class GeminiClient:
                     timeout=30.0,
                 )
 
-                # ── Rate-limit handling ───────────────────────
                 if r.status_code == 429:
                     await self.orchestrator.report_error(ks, 429, "rate-limit")
                     self.orchestrator.release_reservation(ks, gen_reservation)
@@ -561,7 +512,7 @@ class GeminiClient:
                     if not ks:
                         raise HTTPException(503, "All keys exhausted")
                     key, key_id = ks.key, ks.key_id[:8]
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep((2 ** attempt) + random.uniform(0, 1))
                     continue
 
                 if r.status_code == 403:
@@ -581,27 +532,22 @@ class GeminiClient:
                 r.raise_for_status()
                 data = r.json()
 
-                # ── Extract reply text ────────────────────────
                 raw_text = self._extract_text(data)
                 if not raw_text:
                     raise ValueError("Empty response from Gemini")
 
-                # Parse structured JSON reply
                 try:
                     result = json.loads(raw_text)
-                    reply  = result.get("reply", "").strip()
+                    reply = result.get("reply", "").strip()
                 except json.JSONDecodeError:
-                    # Fallback: use raw text if JSON parsing fails
                     reply = raw_text.strip()
 
                 if not reply:
                     reply = "عذراً، ما قدرت نجاوبك الآن 🙏"
 
-                # ── Extract thought signature (Gemini 3 requirement) ──
                 thought_sig = self._extract_thought_signature(data)
 
-                # ── Token accounting ──────────────────────────
-                usage        = data.get("usageMetadata", {})
+                usage = data.get("usageMetadata", {})
                 actual_tokens = usage.get("totalTokenCount", total_input)
                 await self.orchestrator.report_success(ks, actual_tokens)
 
@@ -612,10 +558,10 @@ class GeminiClient:
                 )
 
                 return {
-                    "reply":            reply,
-                    "tokens_used":      actual_tokens,
+                    "reply": reply,
+                    "tokens_used": actual_tokens,
                     "thought_signature": thought_sig,
-                    "thinking_level":   thinking_cfg["thinkingConfig"]["thinkingLevel"],
+                    "thinking_level": thinking_cfg["thinkingConfig"]["thinkingLevel"],
                 }
 
             except (HTTPException, json.JSONDecodeError):
@@ -630,26 +576,21 @@ class GeminiClient:
 
 
 # ─────────────────────────────────────────────────────────────
-# TELEGRAM CLIENT
-# Source: https://core.telegram.org/bots/api
+# TELEGRAM CLIENT (نفس الكود السابق)
 # ─────────────────────────────────────────────────────────────
 class TelegramClient:
     def __init__(self, client: httpx.AsyncClient):
         self.client = client
 
     async def send_message(self, chat_id: int, text: str) -> bool:
-        """
-        Send a message. Uses parse_mode=HTML for light formatting.
-        Telegram message length limit: 4096 chars — we chunk if needed.
-        """
         chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
         for chunk in chunks:
             try:
                 r = await self.client.post(
                     f"{TELEGRAM_API}/sendMessage",
                     json={
-                        "chat_id":    chat_id,
-                        "text":       chunk,
+                        "chat_id": chat_id,
+                        "text": chunk,
                         "parse_mode": "HTML",
                     },
                     timeout=10.0,
@@ -663,7 +604,6 @@ class TelegramClient:
         return True
 
     async def send_chat_action(self, chat_id: int, action: str = "typing"):
-        """Show 'typing...' indicator while generating."""
         try:
             await self.client.post(
                 f"{TELEGRAM_API}/sendChatAction",
@@ -674,17 +614,13 @@ class TelegramClient:
             pass
 
     async def set_webhook(self, url: str) -> bool:
-        """
-        Register the webhook with Telegram.
-        Source: https://core.telegram.org/bots/api#setwebhook
-        """
         try:
             r = await self.client.post(
                 f"{TELEGRAM_API}/setWebhook",
                 json={
-                    "url":             url,
+                    "url": url,
                     "allowed_updates": ["message"],
-                    "drop_pending_updates": False,  # keep msgs during restarts
+                    "drop_pending_updates": False,
                 },
                 timeout=10.0,
             )
@@ -699,31 +635,30 @@ class TelegramClient:
             return False
 
 
-
 # ─────────────────────────────────────────────────────────────
 # FASTAPI APP
 # ─────────────────────────────────────────────────────────────
 orchestrator: Optional[SmartKeyOrchestrator] = None
-supabase:     Optional[SupabaseClient]       = None
-gemini:       Optional[GeminiClient]         = None
-telegram:     Optional[TelegramClient]       = None
-http_client:  Optional[httpx.AsyncClient]    = None
+supabase: Optional[SupabaseClient] = None
+gemini: Optional[GeminiClient] = None
+telegram: Optional[TelegramClient] = None
+http_client: Optional[httpx.AsyncClient] = None
 
-RENDER_URL = os.environ.get("RENDER_URL", "")   # e.g. https://sahaba.onrender.com
+RENDER_URL = os.environ.get("RENDER_URL", "")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global http_client, orchestrator, supabase, gemini, telegram
 
-    http_client  = httpx.AsyncClient(http2=True, timeout=30.0)
+    http_client = httpx.AsyncClient(http2=True, timeout=30.0)
     orchestrator = SmartKeyOrchestrator(GEMINI_KEYS)
-    supabase     = SupabaseClient(http_client)
-    gemini       = GeminiClient(http_client, orchestrator)
-    telegram     = TelegramClient(http_client)
+    supabase = SupabaseClient(http_client)
+    gemini = GeminiClient(http_client, orchestrator)
+    telegram = TelegramClient(http_client)
 
     asyncio.create_task(orchestrator.health_loop())
+    asyncio.create_task(orchestrator.health_check_keys())  # إضافة إعادة تنشيط المفاتيح
 
-    # Auto-register webhook if RENDER_URL is set
     if RENDER_URL:
         webhook_url = f"{RENDER_URL}/webhook"
         await telegram.set_webhook(webhook_url)
@@ -738,9 +673,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-# ─────────────────────────────────────────────────────────────
-# TELEGRAM WEBHOOK HANDLER
-# ─────────────────────────────────────────────────────────────
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
     try:
@@ -763,9 +695,9 @@ async def telegram_webhook(request: Request):
         logger.info(f"⏭️ No message field | update_id={update.get('update_id')}")
         return {"ok": True}
 
-    chat_id  = message.get("chat", {}).get("id")
-    text     = (message.get("text") or "").strip()
-    user_id  = str(message.get("from", {}).get("id", ""))
+    chat_id = message.get("chat", {}).get("id")
+    text = (message.get("text") or "").strip()
+    user_id = str(message.get("from", {}).get("id", ""))
     username = message.get("from", {}).get("username", "unknown")
 
     logger.info(f"💬 msg | user={user_id} @{username} | chat={chat_id} | text=[{text[:80]}]")
@@ -774,12 +706,10 @@ async def telegram_webhook(request: Request):
         logger.warning("⚠️ Missing chat_id or user_id")
         return {"ok": True}
 
-    # Skip non-text (stickers, photos, etc.)
     if not text:
         logger.info(f"⏭️ No text | msg_keys={list(message.keys())}")
         return {"ok": True}
 
-    # Handle /start command
     if text.startswith("/start"):
         await telegram.send_message(
             chat_id,
@@ -787,12 +717,11 @@ async def telegram_webhook(request: Request):
         )
         return {"ok": True}
 
-    # Show typing indicator
     await telegram.send_chat_action(chat_id)
 
     try:
         logger.info(f"📚 Fetching history for user={user_id}…")
-        history  = await supabase.get_history(user_id, limit=20)
+        history = await supabase.get_history(user_id, limit=20)
         logger.info(f"📚 History: {len(history)} message(s)")
 
         messages = history + [{"role": "user", "content": text, "thought_signature": None}]
@@ -801,7 +730,6 @@ async def telegram_webhook(request: Request):
         result = await gemini.generate_response(messages)
         logger.info(f"✅ Gemini replied | tokens={result['tokens_used']} | thinking={result['thinking_level']}")
 
-        # Save both turns
         await supabase.save_message(user_id, "user", text)
         await supabase.save_message(
             user_id, "assistant", result["reply"],
@@ -824,23 +752,28 @@ async def telegram_webhook(request: Request):
     return {"ok": True}
 
 
-# ─────────────────────────────────────────────────────────────
-# HEALTH & STATUS ENDPOINTS
-# ─────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
     stats = orchestrator.get_stats()
     return {
         "status": "healthy" if stats["active"] > 0 else "degraded",
-        "model":  MODEL_NAME,
-        "keys":   stats,
+        "model": MODEL_NAME,
+        "keys": stats,
+        "rate_limits": {
+            "max_rpm": MAX_RPM,
+            "safe_rpm": SAFE_RPM,
+            "max_tpm": MAX_TPM,
+            "safe_tpm": SAFE_TPM,
+            "max_rpd": MAX_RPD,
+            "safe_rpd": SAFE_RPD,
+        }
     }
 
 @app.get("/keys/status")
 async def keys_status():
     async with orchestrator.lock:
         return {
-            "keys":  [k.to_dict() for k in orchestrator.keys],
+            "keys": [k.to_dict() for k in orchestrator.keys],
             "stats": orchestrator.get_stats(),
         }
 
