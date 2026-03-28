@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: sahaba-bot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free           # Change to "starter" for always-on
+
+    # Health check — Render pings this to confirm the service is live
+    healthCheckPath: /health
+
+    # Environment variables — set these in the Render dashboard
+    # (never commit real values to Git)
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false          # fill manually in dashboard
+
+      - key: SUPABASE_URL
+        sync: false
+
+      - key: SUPABASE_KEY
+        sync: false
+
+      - key: RENDER_URL
+        sync: false          # e.g. https://sahaba-bot.onrender.com
+
+      - key: WEBHOOK_SECRET
+        generateValue: true  # Render generates a random secret automatically
+
+      # Add GEMINI_KEY_1 … GEMINI_KEY_N in the dashboard
+      # Example:
+      # - key: GEMINI_KEY_1
+      #   sync: false
+      # - key: GEMINI_KEY_2
+      #   sync: false
