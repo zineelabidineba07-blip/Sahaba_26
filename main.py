@@ -466,7 +466,7 @@ class GeminiClient:
             "contents": contents,
             "systemInstruction": SYSTEM_INSTRUCTION,
             "generationConfig": {
-                "temperature": 1.0,
+                "temperature": 1.2,
                 "maxOutputTokens": max_output,
                 "responseMimeType": "application/json",
                 "responseSchema": {
