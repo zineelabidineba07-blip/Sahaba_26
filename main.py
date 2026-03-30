@@ -33,20 +33,21 @@ if not TELEGRAM_TOKEN:
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("❌ Missing Supabase config")
 
-# تحميل مفاتيح Gemini
+# تحميل مفاتيح AnyAPI (نفس المتغيرات GEMINI_KEY_*)
 _raw_keys = [v for k, v in os.environ.items() if k.startswith("GEMINI_KEY_") and v.strip()]
 random.shuffle(_raw_keys)
 GEMINI_KEYS = _raw_keys
 if not GEMINI_KEYS:
-    raise RuntimeError("❌ No Gemini keys found (GEMINI_KEY_1 ... GEMINI_KEY_N)")
+    raise RuntimeError("❌ No API keys found (GEMINI_KEY_1 ... GEMINI_KEY_N)")
 
-logger.info(f"✅ {len(GEMINI_KEYS)} Gemini key(s) loaded")
+logger.info(f"✅ {len(GEMINI_KEYS)} API key(s) loaded")
 
-MODEL_NAME   = "gpt-4o"
-GEMINI_BASE  = "https://api.anyapi.ai/v1/chat/completions"
+MODEL_NAME   = "gemini-2.5-flash"
+# استخدام واجهة AnyAPI المتوافقة مع OpenAI
+GEMINI_BASE  = "https://api.anyapi.ai/v1"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# حدود المعدلات (متوافقة مع Gemini 2.5 Flash المجاني)
+# حدود المعدلات (نستخدم نفس القيم ولكن AnyAPI تحدها بـ 100 RPM للحساب المجاني)
 MAX_RPM = int(os.environ.get("GEMINI_MAX_RPM", "15"))
 MAX_TPM = int(os.environ.get("GEMINI_MAX_TPM", "1000000"))
 MAX_RPD = int(os.environ.get("GEMINI_MAX_RPD", "1500"))
@@ -91,7 +92,7 @@ SYSTEM_INSTRUCTION = {
 }
 
 # ─────────────────────────────────────────────────────────────
-# KEY STATE TRACKING
+# KEY STATE TRACKING (نفسه دون تغيير)
 # ─────────────────────────────────────────────────────────────
 @dataclass
 class KeyMetrics:
@@ -260,7 +261,7 @@ class SmartKeyOrchestrator:
 
 
 # ─────────────────────────────────────────────────────────────
-# SUPABASE CLIENT (يدعم mood, metadata, users)
+# SUPABASE CLIENT (نفسه)
 # ─────────────────────────────────────────────────────────────
 class SupabaseClient:
     def __init__(self, client: httpx.AsyncClient):
@@ -353,7 +354,7 @@ class SupabaseClient:
 
 
 # ─────────────────────────────────────────────────────────────
-# GEMINI CLIENT (متوافق مع Gemini 2.5 Flash)
+# ANYAPI CLIENT (معدل للعمل مع AnyAPI)
 # ─────────────────────────────────────────────────────────────
 class GeminiClient:
     def __init__(self, client: httpx.AsyncClient, orchestrator: SmartKeyOrchestrator):
@@ -361,20 +362,22 @@ class GeminiClient:
         self.orchestrator = orchestrator
 
     def _make_headers(self, key: str) -> Dict:
+        # AnyAPI يستخدم Bearer token
         return {
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json"
         }
 
     def _estimate_tokens(self, messages: List[Dict]) -> int:
-        # تقدير بسيط: كل حرف ~0.25 توكين + 300 overhead
+        """تقدير بسيط للتوكينات (بديل لـ countTokens)"""
         total = 0
         for msg in messages:
-            total += max(1, int(len(msg.get("content", "")) * 0.25))
-        return total + 300
+            content = msg.get("content", "")
+            total += max(1, int(len(content) * 0.25))
+        return total + 300  # إضافة overhead
 
     async def generate_response(self, messages: List[Dict]) -> Dict:
-        # بناء قائمة الرسائل بصيغة OpenAI
+        # تحويل التاريخ إلى صيغة OpenAI (system + user/assistant)
         openai_messages = []
         # إضافة التعليمات النظامية
         system_text = SYSTEM_INSTRUCTION["parts"][0]["text"]
@@ -384,12 +387,12 @@ class GeminiClient:
             role = "user" if msg["role"] == "user" else "assistant"
             openai_messages.append({"role": role, "content": msg["content"]})
 
-        # تقدير التوكينات (بدون countTokens)
+        # تقدير التوكينات
         estimated_input = self._estimate_tokens(openai_messages)
-        total_input = estimated_input
 
         # حجز مفتاح
-        ks = await self.orchestrator.get_best_key(estimated_input + 500)
+        reservation_tokens = estimated_input + 500
+        ks = await self.orchestrator.get_best_key(reservation_tokens)
         if not ks:
             raise HTTPException(503, "No keys available")
 
@@ -397,7 +400,7 @@ class GeminiClient:
         MAX_OUTPUT_BASE = 400
         MAX_OUTPUT_LONG = 800
         output_cap = MAX_OUTPUT_LONG if len(messages) > 8 else MAX_OUTPUT_BASE
-        max_output = min(output_cap, 65536 - total_input)
+        max_output = min(output_cap, 65536 - estimated_input)
         max_output = max(150, max_output)
 
         payload = {
@@ -405,7 +408,7 @@ class GeminiClient:
             "messages": openai_messages,
             "temperature": 0.8,
             "max_tokens": max_output,
-            "response_format": {"type": "json_object"}
+            "response_format": {"type": "json_object"}  # لتشجيع الرد بصيغة JSON
         }
 
         max_retries = min(3, len(self.orchestrator.keys))
@@ -423,8 +426,8 @@ class GeminiClient:
 
                 if r.status_code == 429:
                     await self.orchestrator.report_error(ks, 429, "rate-limit")
-                    self.orchestrator.release_reservation(ks, estimated_input + 500)
-                    ks = await self.orchestrator.get_best_key(estimated_input + 500)
+                    self.orchestrator.release_reservation(ks, reservation_tokens)
+                    ks = await self.orchestrator.get_best_key(reservation_tokens)
                     if not ks:
                         raise HTTPException(503, "All keys exhausted")
                     key, key_id = ks.key, ks.key_id[:8]
@@ -433,8 +436,8 @@ class GeminiClient:
 
                 if r.status_code == 403:
                     await self.orchestrator.report_error(ks, 403, "invalid key")
-                    self.orchestrator.release_reservation(ks, estimated_input + 500)
-                    ks = await self.orchestrator.get_best_key(estimated_input + 500)
+                    self.orchestrator.release_reservation(ks, reservation_tokens)
+                    ks = await self.orchestrator.get_best_key(reservation_tokens)
                     if not ks:
                         raise HTTPException(503, "All keys invalid")
                     key, key_id = ks.key, ks.key_id[:8]
@@ -454,7 +457,7 @@ class GeminiClient:
                 if not raw_text:
                     raise ValueError("Empty response from AnyAPI")
 
-                # محاولة تحويل JSON
+                # محاولة فك JSON
                 try:
                     result = json.loads(raw_text)
                     reply = result.get("reply", "").strip()
@@ -464,7 +467,7 @@ class GeminiClient:
                 if not reply:
                     reply = "عذراً، ما قدرت نجاوبك الآن 🙏"
 
-                # حساب التوكينات المستخدمة (إن وُجدت في response)
+                # حساب التوكينات المستخدمة (إن وجدت)
                 usage = data.get("usage", {})
                 actual_tokens = usage.get("total_tokens", estimated_input)
                 await self.orchestrator.report_success(ks, actual_tokens)
@@ -474,7 +477,7 @@ class GeminiClient:
                 return {
                     "reply": reply,
                     "tokens_used": actual_tokens,
-                    "thought_signature": None,
+                    "thought_signature": None,    # غير مدعوم في AnyAPI
                     "thinking_level": "none",
                     "mood": "neutral",
                 }
@@ -486,11 +489,12 @@ class GeminiClient:
                 await self.orchestrator.report_error(ks, 0, str(e))
                 await asyncio.sleep(1)
 
-        self.orchestrator.release_reservation(ks, estimated_input + 500)
+        self.orchestrator.release_reservation(ks, reservation_tokens)
         raise HTTPException(503, "All retries exhausted")
 
+
 # ─────────────────────────────────────────────────────────────
-# TELEGRAM CLIENT
+# TELEGRAM CLIENT (نفسه)
 # ─────────────────────────────────────────────────────────────
 class TelegramClient:
     def __init__(self, client: httpx.AsyncClient):
@@ -563,7 +567,6 @@ async def lifespan(app: FastAPI):
     telegram = TelegramClient(http_client)
 
     asyncio.create_task(orchestrator.health_loop())
-    # health_check_keys مؤجلة (ستضاف لاحقاً كـ Edge Function)
 
     if RENDER_URL:
         webhook_url = f"{RENDER_URL}/webhook"
@@ -623,7 +626,7 @@ async def telegram_webhook(request: Request):
         # حفظ رسالة المستخدم
         await supabase.save_message(user_id, "user", text)
 
-        # حفظ رسالة البوت مع metadata
+        # حفظ رسالة البوت
         metadata = {
             "tokens_used": result["tokens_used"],
             "thinking_level": result["thinking_level"],
