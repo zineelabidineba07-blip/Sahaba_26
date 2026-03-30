@@ -42,8 +42,8 @@ if not GEMINI_KEYS:
 
 logger.info(f"✅ {len(GEMINI_KEYS)} Gemini key(s) loaded")
 
-MODEL_NAME   = "gemini-2.5-flash"
-GEMINI_BASE  = "https://api.anyapi.ai"
+MODEL_NAME   = "gpt-4o"
+GEMINI_BASE  = "https://api.anyapi.ai/v1/chat/completions"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 # حدود المعدلات (متوافقة مع Gemini 2.5 Flash المجاني)
