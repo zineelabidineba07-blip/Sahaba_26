@@ -362,58 +362,47 @@ class GeminiClient:
         self.orchestrator = orchestrator
 
     def _make_headers(self, key: str) -> Dict:
-        # AnyAPI يستخدم Bearer token
         return {
             "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
 
     def _estimate_tokens(self, messages: List[Dict]) -> int:
-        """تقدير بسيط للتوكينات (بديل لـ countTokens)"""
         total = 0
-        for msg in messages:
-            content = msg.get("content", "")
-            total += max(1, int(len(content) * 0.25))
-        return total + 300  # إضافة overhead
+        for m in messages:
+            total += max(1, len(m.get("content", "")) // 4)
+        return total + 200
 
     async def generate_response(self, messages: List[Dict]) -> Dict:
-        # تحويل التاريخ إلى صيغة OpenAI (system + user/assistant)
-        openai_messages = []
-        # إضافة التعليمات النظامية
-        system_text = SYSTEM_INSTRUCTION["parts"][0]["text"]
-        openai_messages.append({"role": "system", "content": system_text})
+        estimated_tokens = self._estimate_tokens(messages)
 
-        for msg in messages:
-            role = "user" if msg["role"] == "user" else "assistant"
-            openai_messages.append({"role": role, "content": msg["content"]})
-
-        # تقدير التوكينات
-        estimated_input = self._estimate_tokens(openai_messages)
-
-        # حجز مفتاح
-        reservation_tokens = estimated_input + 500
-        ks = await self.orchestrator.get_best_key(reservation_tokens)
+        ks = await self.orchestrator.get_best_key(estimated_tokens + 500)
         if not ks:
-            raise HTTPException(503, "No keys available")
+            raise HTTPException(503, "No keys available (all cooling or dead)")
 
-        # حساب max_output
-        MAX_OUTPUT_BASE = 400
-        MAX_OUTPUT_LONG = 800
-        output_cap = MAX_OUTPUT_LONG if len(messages) > 8 else MAX_OUTPUT_BASE
-        max_output = min(output_cap, 65536 - estimated_input)
-        max_output = max(150, max_output)
+        key = ks.key
+        max_output = 512
 
         payload = {
             "model": MODEL_NAME,
-            "messages": openai_messages,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": SYSTEM_INSTRUCTION["parts"][0]["text"],
+                },
+                *[
+                    {
+                        "role": "user" if m["role"] == "user" else "assistant",
+                        "content": m["content"],
+                    }
+                    for m in messages
+                ],
+            ],
             "temperature": 0.8,
             "max_tokens": max_output,
-            "response_format": {"type": "json_object"}  # لتشجيع الرد بصيغة JSON
         }
 
         max_retries = min(3, len(self.orchestrator.keys))
-        key = ks.key
-        key_id = ks.key_id[:8]
 
         for attempt in range(max_retries):
             try:
@@ -426,22 +415,12 @@ class GeminiClient:
 
                 if r.status_code == 429:
                     await self.orchestrator.report_error(ks, 429, "rate-limit")
-                    self.orchestrator.release_reservation(ks, reservation_tokens)
-                    ks = await self.orchestrator.get_best_key(reservation_tokens)
-                    if not ks:
-                        raise HTTPException(503, "All keys exhausted")
-                    key, key_id = ks.key, ks.key_id[:8]
-                    await asyncio.sleep((2 ** attempt) + random.uniform(0, 1))
+                    await asyncio.sleep(2 ** attempt)
                     continue
 
                 if r.status_code == 403:
-                    await self.orchestrator.report_error(ks, 403, "invalid key")
-                    self.orchestrator.release_reservation(ks, reservation_tokens)
-                    ks = await self.orchestrator.get_best_key(reservation_tokens)
-                    if not ks:
-                        raise HTTPException(503, "All keys invalid")
-                    key, key_id = ks.key, ks.key_id[:8]
-                    continue
+                    await self.orchestrator.report_error(ks, 403, "forbidden")
+                    raise HTTPException(503, "Key forbidden (403)")
 
                 if r.status_code >= 500:
                     await self.orchestrator.report_error(ks, r.status_code, "server error")
@@ -449,52 +428,51 @@ class GeminiClient:
                     continue
 
                 r.raise_for_status()
-                data = r.json()
 
-                # استخراج النص من الاستجابة
-                raw_text = data["choices"][0]["message"]["content"].strip()
-
-                if not raw_text:
-                    raise ValueError("Empty response from AnyAPI")
-
-                # محاولة فك JSON (مرنة)
                 try:
-                    parsed = json.loads(raw_text)
-                    if isinstance(parsed, dict):
-                        reply = parsed.get("reply", "").strip()
-                    else:
-                        # إذا كان الناتج نصاً مباشراً
-                        reply = str(parsed).strip()
-                except json.JSONDecodeError:
-                    # إذا لم يكن JSON صحيحاً، نستخدم النص الأصلي
-                    reply = raw_text.strip()
+                    data = r.json()
+                except Exception:
+                    data = {"raw": r.text}
+
+                reply = ""
+
+                # OpenAI-style response
+                try:
+                    reply = data["choices"][0]["message"]["content"]
+                except Exception:
+                    pass
+
+                # fallback 1
+                if not reply and isinstance(data, dict):
+                    reply = data.get("reply", "")
+
+                # fallback 2
+                if not reply:
+                    reply = str(data)
+
+                reply = reply.strip()
 
                 if not reply:
-                    reply = "عذراً، ما قدرت نجاوبك الآن 🙏"
+                    reply = "ما قدرتش نجاوبك دروك، عاود بعد شوية 🙏"
 
-                # حساب التوكينات المستخدمة (إن وجدت)
-                usage = data.get("usage", {})
-                actual_tokens = usage.get("total_tokens", estimated_input)
+                actual_tokens = self._estimate_tokens(messages)
                 await self.orchestrator.report_success(ks, actual_tokens)
-
-                logger.info(f"✅ Key {key_id}… | tokens={actual_tokens} | reply_len={len(reply)}")
 
                 return {
                     "reply": reply,
                     "tokens_used": actual_tokens,
-                    "thought_signature": None,    # غير مدعوم في AnyAPI
+                    "thought_signature": None,
                     "thinking_level": "none",
                     "mood": "neutral",
                 }
 
-            except (HTTPException, json.JSONDecodeError):
+            except HTTPException:
                 raise
+
             except Exception as e:
-                logger.error(f"generate attempt {attempt + 1}: {type(e).__name__}: {repr(e)}", exc_info=True)
                 await self.orchestrator.report_error(ks, 0, str(e))
                 await asyncio.sleep(1)
 
-        self.orchestrator.release_reservation(ks, reservation_tokens)
         raise HTTPException(503, "All retries exhausted")
 
 
