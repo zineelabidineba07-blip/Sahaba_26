@@ -42,7 +42,7 @@ if not GEMINI_KEYS:
 
 logger.info(f"✅ {len(GEMINI_KEYS)} API key(s) loaded")
 
-MODEL_NAME   = "google/gemini-2.5-flash"
+MODEL_NAME   = os.environ.get("MODEL_NAME", "google/gemini-2.5-flash")
 # استخدام واجهة AnyAPI المتوافقة مع OpenAI
 GEMINI_BASE  = "https://api.anyapi.ai/v1"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
@@ -354,7 +354,7 @@ class SupabaseClient:
 
 
 # ─────────────────────────────────────────────────────────────
-# ANYAPI CLIENT (معدل للعمل مع AnyAPI)
+# ANYAPI CLIENT (معدل للعمل مع AnyAPI + معالجة مرنة للردود)
 # ─────────────────────────────────────────────────────────────
 class GeminiClient:
     def __init__(self, client: httpx.AsyncClient, orchestrator: SmartKeyOrchestrator):
@@ -457,11 +457,16 @@ class GeminiClient:
                 if not raw_text:
                     raise ValueError("Empty response from AnyAPI")
 
-                # محاولة فك JSON
+                # محاولة فك JSON (مرنة)
                 try:
-                    result = json.loads(raw_text)
-                    reply = result.get("reply", "").strip()
+                    parsed = json.loads(raw_text)
+                    if isinstance(parsed, dict):
+                        reply = parsed.get("reply", "").strip()
+                    else:
+                        # إذا كان الناتج نصاً مباشراً
+                        reply = str(parsed).strip()
                 except json.JSONDecodeError:
+                    # إذا لم يكن JSON صحيحاً، نستخدم النص الأصلي
                     reply = raw_text.strip()
 
                 if not reply:
@@ -472,7 +477,7 @@ class GeminiClient:
                 actual_tokens = usage.get("total_tokens", estimated_input)
                 await self.orchestrator.report_success(ks, actual_tokens)
 
-                logger.info(f"✅ Key {key_id}… | tokens={actual_tokens}")
+                logger.info(f"✅ Key {key_id}… | tokens={actual_tokens} | reply_len={len(reply)}")
 
                 return {
                     "reply": reply,
