@@ -42,7 +42,7 @@ if not GEMINI_KEYS:
 
 logger.info(f"✅ {len(GEMINI_KEYS)} API key(s) loaded")
 
-MODEL_NAME   = os.environ.get("MODEL_NAME", "google/gemini-2.5-flash")
+MODEL_NAME   = os.environ.get("MODEL_NAME", "gemini-2.5-flash")
 # استخدام واجهة AnyAPI المتوافقة مع OpenAI
 GEMINI_BASE  = "https://api.anyapi.ai/v1"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
