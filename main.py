@@ -680,7 +680,7 @@ def should_respond_in_group(message: dict) -> bool:
     """ترجع True إذا كان يجب الرد في المجموعة (مناداتها أو رد على رسالتها)"""
     # الحالة الأولى: الرسالة تحتوي على اسم البوت
     text = message.get("text", "")
-    if text and "سحابة" in text:
+    if text and "سحابه" in text:
         return True
 
     # الحالة الثانية: الرسالة هي رد على رسالة سابقة من البوت
