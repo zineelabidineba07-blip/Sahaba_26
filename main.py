@@ -33,23 +33,22 @@ if not TELEGRAM_TOKEN:
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("❌ Missing Supabase config")
 
-# تحميل مفاتيح AnyAPI (نفس المتغيرات GEMINI_KEY_*)
+# تحميل مفاتيح Google Gemini API (يجب أن تكون صالحة للنموذج المطلوب)
 _raw_keys = [v for k, v in os.environ.items() if k.startswith("GEMINI_KEY_") and v.strip()]
 random.shuffle(_raw_keys)
 GEMINI_KEYS = _raw_keys
 if not GEMINI_KEYS:
-    raise RuntimeError("❌ No API keys found (GEMINI_KEY_1 ... GEMINI_KEY_N)")
+    raise RuntimeError("❌ No Gemini keys found (GEMINI_KEY_1 ... GEMINI_KEY_N)")
 
-logger.info(f"✅ {len(GEMINI_KEYS)} API key(s) loaded")
+logger.info(f"✅ {len(GEMINI_KEYS)} Gemini key(s) loaded")
 
-# النموذج الجديد: GPT-4.1 عبر AnyAPI (يمكن تغييره عبر البيئة)
-MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4.1")
-# استخدام واجهة AnyAPI المتوافقة مع OpenAI
-GEMINI_BASE  = "https://api.openai.com/v1/chat/completions"
+MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-3.1-flash-lite")
+# نقطة نهاية Google Gemini API
+GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# حدود المعدلات (نستخدم قيم افتراضية معقولة)
-MAX_RPM = int(os.environ.get("GEMINI_MAX_RPM", "30"))   # AnyAPI المجاني 100 RPM
+# حدود المعدلات (تقديرية، حسب النموذج)
+MAX_RPM = int(os.environ.get("GEMINI_MAX_RPM", "30"))
 MAX_TPM = int(os.environ.get("GEMINI_MAX_TPM", "200000"))
 MAX_RPD = int(os.environ.get("GEMINI_MAX_RPD", "1500"))
 
@@ -93,7 +92,7 @@ SYSTEM_INSTRUCTION = {
 }
 
 # ─────────────────────────────────────────────────────────────
-# KEY STATE TRACKING (نفسه، لكن نعتمد على تقدير التوكينات)
+# KEY STATE TRACKING (نفسه)
 # ─────────────────────────────────────────────────────────────
 @dataclass
 class KeyMetrics:
@@ -355,7 +354,7 @@ class SupabaseClient:
 
 
 # ─────────────────────────────────────────────────────────────
-# ANYAPI CLIENT (معدل للعمل مع GPT-4.1 عبر AnyAPI)
+# GEMINI CLIENT (متوافق مع Gemini API الرسمي)
 # ─────────────────────────────────────────────────────────────
 class GeminiClient:
     def __init__(self, client: httpx.AsyncClient, orchestrator: SmartKeyOrchestrator):
@@ -364,31 +363,36 @@ class GeminiClient:
 
     def _make_headers(self, key: str) -> Dict:
         return {
-            "Authorization": f"Bearer {key}",
+            "x-goog-api-key": key,
             "Content-Type": "application/json"
         }
 
-    def _estimate_tokens(self, messages: List[Dict]) -> int:
-        """تقدير بسيط للتوكينات (حوالي 0.25 توكين لكل حرف + overhead)"""
-        total = 0
+    def _build_contents(self, messages: List[Dict]) -> List[Dict]:
+        """تحويل الرسائل التاريخية إلى صيغة contents الخاصة بـ Gemini"""
+        contents = []
         for msg in messages:
-            content = msg.get("content", "")
-            total += max(1, int(len(content) * 0.25))
-        return total + 300  # إضافة overhead
+            role = "user" if msg["role"] == "user" else "model"
+            parts = [{"text": msg["content"]}]
+            # تجاهل thought_signature لأن النموذج الجديد لا يدعمها
+            contents.append({"role": role, "parts": parts})
+        return contents
+
+    def _estimate_tokens(self, contents: List[Dict]) -> int:
+        """تقدير بسيط للتوكينات"""
+        total = 0
+        for c in contents:
+            for p in c.get("parts", []):
+                total += max(1, int(len(p.get("text", "")) * 0.25))
+        # إضافة system instruction
+        total += max(1, int(len(SYSTEM_INSTRUCTION["parts"][0]["text"]) * 0.25))
+        return total + 300
 
     async def generate_response(self, messages: List[Dict]) -> Dict:
-        # تحويل التاريخ إلى صيغة OpenAI
-        openai_messages = []
-        # إضافة التعليمات النظامية كرسالة system
-        system_text = SYSTEM_INSTRUCTION["parts"][0]["text"]
-        openai_messages.append({"role": "system", "content": system_text})
-
-        for msg in messages:
-            role = "user" if msg["role"] == "user" else "assistant"
-            openai_messages.append({"role": role, "content": msg["content"]})
+        # بناء contents من التاريخ
+        contents = self._build_contents(messages)
 
         # تقدير التوكينات
-        estimated_input = self._estimate_tokens(openai_messages)
+        estimated_input = self._estimate_tokens(contents)
 
         # حجز مفتاح
         reservation_tokens = estimated_input + 500
@@ -400,15 +404,25 @@ class GeminiClient:
         MAX_OUTPUT_BASE = 400
         MAX_OUTPUT_LONG = 800
         output_cap = MAX_OUTPUT_LONG if len(messages) > 8 else MAX_OUTPUT_BASE
-        max_output = min(output_cap, 16384 - estimated_input)  # GPT-4.1 max 16k tokens
+        max_output = min(output_cap, 65536 - estimated_input)  # النموذج يدعم 1M سياق، لكن نحدد كحد آمن
         max_output = max(150, max_output)
 
+        # بناء payload Gemini
         payload = {
-            "model": MODEL_NAME,
-            "messages": openai_messages,
-            "temperature": 0.8,
-            "max_tokens": max_output,
-            "response_format": {"type": "json_object"}   # لتشجيع الرد بصيغة JSON
+            "contents": contents,
+            "systemInstruction": SYSTEM_INSTRUCTION,
+            "generationConfig": {
+                "temperature": 0.8,
+                "maxOutputTokens": max_output,
+                "responseMimeType": "application/json",
+                "responseSchema": {
+                    "type": "object",
+                    "properties": {
+                        "reply": {"type": "string"}
+                    },
+                    "required": ["reply"]
+                }
+            }
         }
 
         max_retries = min(3, len(self.orchestrator.keys))
@@ -418,7 +432,7 @@ class GeminiClient:
         for attempt in range(max_retries):
             try:
                 r = await self.client.post(
-                    f"{GEMINI_BASE}/chat/completions",
+                    f"{GEMINI_BASE}/models/{MODEL_NAME}:generateContent",
                     headers=self._make_headers(key),
                     json=payload,
                     timeout=30.0,
@@ -452,12 +466,15 @@ class GeminiClient:
                 data = r.json()
 
                 # استخراج النص من الاستجابة
-                raw_text = data["choices"][0]["message"]["content"].strip()
+                try:
+                    raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                except (KeyError, IndexError):
+                    raise ValueError("Invalid response structure from Gemini")
 
                 if not raw_text:
-                    raise ValueError("Empty response from AnyAPI")
+                    raise ValueError("Empty response from Gemini")
 
-                # محاولة فك JSON (مرنة)
+                # محاولة فك JSON
                 try:
                     parsed = json.loads(raw_text)
                     if isinstance(parsed, dict):
@@ -470,9 +487,9 @@ class GeminiClient:
                 if not reply:
                     reply = "عذراً، ما قدرت نجاوبك الآن 🙏"
 
-                # حساب التوكينات المستخدمة (إن وجدت)
-                usage = data.get("usage", {})
-                actual_tokens = usage.get("total_tokens", estimated_input)
+                # حساب التوكينات المستخدمة
+                usage = data.get("usageMetadata", {})
+                actual_tokens = usage.get("totalTokenCount", estimated_input)
                 await self.orchestrator.report_success(ks, actual_tokens)
 
                 logger.info(f"✅ Key {key_id}… | tokens={actual_tokens} | reply_len={len(reply)}")
@@ -480,7 +497,7 @@ class GeminiClient:
                 return {
                     "reply": reply,
                     "tokens_used": actual_tokens,
-                    "thought_signature": None,
+                    "thought_signature": None,   # غير مدعوم في هذا النموذج
                     "thinking_level": "none",
                     "mood": "neutral",
                 }
@@ -575,7 +592,7 @@ async def lifespan(app: FastAPI):
         webhook_url = f"{RENDER_URL}/webhook"
         await telegram.set_webhook(webhook_url)
 
-    logger.info(f"🚀 Sahaba bot started — model: {MODEL_NAME}")
+    logger.info(f"🚀 Sahaba bot started — model: {MODEL_NAME} (Google Gemini)")
     yield
 
     await http_client.aclose()
