@@ -45,7 +45,7 @@ logger.info(f"✅ {len(GEMINI_KEYS)} API key(s) loaded")
 # النموذج الجديد: GPT-4.1 عبر AnyAPI (يمكن تغييره عبر البيئة)
 MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4.1")
 # استخدام واجهة AnyAPI المتوافقة مع OpenAI
-GEMINI_BASE  = "https://api.openai.com/v1"
+GEMINI_BASE  = "https://api.openai.com/v1/chat/completions"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 # حدود المعدلات (نستخدم قيم افتراضية معقولة)
