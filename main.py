@@ -109,8 +109,9 @@ SYSTEM_INSTRUCTION = {
         )
     }]
 }
+
 # ─────────────────────────────────────────────────────────────
-# KEY STATE TRACKING (نفسه)
+# KEY STATE TRACKING
 # ─────────────────────────────────────────────────────────────
 @dataclass
 class KeyMetrics:
@@ -372,7 +373,7 @@ class SupabaseClient:
 
 
 # ─────────────────────────────────────────────────────────────
-# GEMINI CLIENT – مع تحسينات (Few-shot, structured output, thinking level, caching)
+# GEMINI CLIENT
 # ─────────────────────────────────────────────────────────────
 class GeminiClient:
     def __init__(self, client: httpx.AsyncClient, orchestrator: SmartKeyOrchestrator):
@@ -459,8 +460,6 @@ class GeminiClient:
 
         # إعداد التفكير
         thinking_config = {"thinkingLevel": self.thinking_level}
-        # إذا كان النموذج 2.5 نستخدم thinkingBudget، لكن هنا نفترض 3.1 Flash-Lite
-        # نضيف فقط thinkingLevel
 
         payload = {
             "contents": contents,
@@ -639,18 +638,30 @@ supabase: Optional[SupabaseClient] = None
 gemini: Optional[GeminiClient] = None
 telegram: Optional[TelegramClient] = None
 http_client: Optional[httpx.AsyncClient] = None
+BOT_ID: Optional[int] = None
 
 RENDER_URL = os.environ.get("RENDER_URL", "")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global http_client, orchestrator, supabase, gemini, telegram
+    global http_client, orchestrator, supabase, gemini, telegram, BOT_ID
 
     http_client = httpx.AsyncClient(http2=True, timeout=30.0)
     orchestrator = SmartKeyOrchestrator(GEMINI_KEYS)
     supabase = SupabaseClient(http_client)
     gemini = GeminiClient(http_client, orchestrator)
     telegram = TelegramClient(http_client)
+
+    # جلب معرف البوت
+    try:
+        me = await http_client.get(f"{TELEGRAM_API}/getMe")
+        if me.status_code == 200:
+            BOT_ID = me.json()["result"]["id"]
+            logger.info(f"✅ Bot ID: {BOT_ID}")
+        else:
+            logger.error("Could not fetch bot ID")
+    except Exception as e:
+        logger.error(f"Failed to get bot ID: {e}")
 
     asyncio.create_task(orchestrator.health_loop())
 
@@ -663,6 +674,23 @@ async def lifespan(app: FastAPI):
 
     await http_client.aclose()
     logger.info("👋 Bot shutdown")
+
+
+def should_respond_in_group(message: dict) -> bool:
+    """ترجع True إذا كان يجب الرد في المجموعة (مناداتها أو رد على رسالتها)"""
+    # الحالة الأولى: الرسالة تحتوي على اسم البوت
+    text = message.get("text", "")
+    if text and "سحابة" in text:
+        return True
+
+    # الحالة الثانية: الرسالة هي رد على رسالة سابقة من البوت
+    reply = message.get("reply_to_message")
+    if reply and BOT_ID:
+        reply_from = reply.get("from", {})
+        if reply_from.get("id") == BOT_ID:
+            return True
+
+    return False
 
 
 app = FastAPI(lifespan=lifespan)
@@ -687,12 +715,20 @@ async def telegram_webhook(request: Request):
     if not message:
         return {"ok": True}
 
-    chat_id = message.get("chat", {}).get("id")
+    chat = message.get("chat", {})
+    chat_type = chat.get("type")
+    chat_id = chat.get("id")
     text = (message.get("text") or "").strip()
     user_id = str(message.get("from", {}).get("id", ""))
     username = message.get("from", {}).get("username", "unknown")
 
-    logger.info(f"💬 msg | user={user_id} @{username} | chat={chat_id} | text=[{text[:80]}]")
+    logger.info(f"💬 msg | user={user_id} @{username} | chat={chat_id} type={chat_type} | text=[{text[:80]}]")
+
+    # التحقق من صلاحية الرد في المجموعات
+    if chat_type != "private":
+        if not should_respond_in_group(message):
+            logger.info(f"⏭️ Ignored group message (not addressed to bot nor reply)")
+            return {"ok": True}
 
     if not chat_id or not user_id or not text:
         return {"ok": True}
