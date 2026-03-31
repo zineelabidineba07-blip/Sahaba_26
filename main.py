@@ -42,14 +42,15 @@ if not GEMINI_KEYS:
 
 logger.info(f"✅ {len(GEMINI_KEYS)} API key(s) loaded")
 
-MODEL_NAME   = os.environ.get("MODEL_NAME", "openai/gpt-4.1")
+# النموذج الجديد: GPT-4.1 عبر AnyAPI (يمكن تغييره عبر البيئة)
+MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4.1")
 # استخدام واجهة AnyAPI المتوافقة مع OpenAI
 GEMINI_BASE  = "https://api.anyapi.ai/v1"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# حدود المعدلات (نستخدم نفس القيم ولكن AnyAPI تحدها بـ 100 RPM للحساب المجاني)
-MAX_RPM = int(os.environ.get("GEMINI_MAX_RPM", "15"))
-MAX_TPM = int(os.environ.get("GEMINI_MAX_TPM", "1000000"))
+# حدود المعدلات (نستخدم قيم افتراضية معقولة)
+MAX_RPM = int(os.environ.get("GEMINI_MAX_RPM", "30"))   # AnyAPI المجاني 100 RPM
+MAX_TPM = int(os.environ.get("GEMINI_MAX_TPM", "200000"))
 MAX_RPD = int(os.environ.get("GEMINI_MAX_RPD", "1500"))
 
 SAFETY_MARGIN = 0.90
@@ -92,7 +93,7 @@ SYSTEM_INSTRUCTION = {
 }
 
 # ─────────────────────────────────────────────────────────────
-# KEY STATE TRACKING (نفسه دون تغيير)
+# KEY STATE TRACKING (نفسه، لكن نعتمد على تقدير التوكينات)
 # ─────────────────────────────────────────────────────────────
 @dataclass
 class KeyMetrics:
@@ -354,7 +355,7 @@ class SupabaseClient:
 
 
 # ─────────────────────────────────────────────────────────────
-# ANYAPI CLIENT (معدل للعمل مع AnyAPI + معالجة مرنة للردود + Debug)
+# ANYAPI CLIENT (معدل للعمل مع GPT-4.1 عبر AnyAPI)
 # ─────────────────────────────────────────────────────────────
 class GeminiClient:
     def __init__(self, client: httpx.AsyncClient, orchestrator: SmartKeyOrchestrator):
@@ -362,14 +363,13 @@ class GeminiClient:
         self.orchestrator = orchestrator
 
     def _make_headers(self, key: str) -> Dict:
-        # AnyAPI يستخدم Bearer token
         return {
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json"
         }
 
     def _estimate_tokens(self, messages: List[Dict]) -> int:
-        """تقدير بسيط للتوكينات (بديل لـ countTokens)"""
+        """تقدير بسيط للتوكينات (حوالي 0.25 توكين لكل حرف + overhead)"""
         total = 0
         for msg in messages:
             content = msg.get("content", "")
@@ -377,9 +377,9 @@ class GeminiClient:
         return total + 300  # إضافة overhead
 
     async def generate_response(self, messages: List[Dict]) -> Dict:
-        # تحويل التاريخ إلى صيغة OpenAI (system + user/assistant)
+        # تحويل التاريخ إلى صيغة OpenAI
         openai_messages = []
-        # إضافة التعليمات النظامية
+        # إضافة التعليمات النظامية كرسالة system
         system_text = SYSTEM_INSTRUCTION["parts"][0]["text"]
         openai_messages.append({"role": "system", "content": system_text})
 
@@ -400,7 +400,7 @@ class GeminiClient:
         MAX_OUTPUT_BASE = 400
         MAX_OUTPUT_LONG = 800
         output_cap = MAX_OUTPUT_LONG if len(messages) > 8 else MAX_OUTPUT_BASE
-        max_output = min(output_cap, 65536 - estimated_input)
+        max_output = min(output_cap, 16384 - estimated_input)  # GPT-4.1 max 16k tokens
         max_output = max(150, max_output)
 
         payload = {
@@ -408,7 +408,7 @@ class GeminiClient:
             "messages": openai_messages,
             "temperature": 0.8,
             "max_tokens": max_output,
-            "response_format": {"type": "json_object"}  # لتشجيع الرد بصيغة JSON
+            "response_format": {"type": "json_object"}   # لتشجيع الرد بصيغة JSON
         }
 
         max_retries = min(3, len(self.orchestrator.keys))
@@ -417,19 +417,12 @@ class GeminiClient:
 
         for attempt in range(max_retries):
             try:
-                url = f"{GEMINI_BASE}/chat/completions"
-                logger.debug(f"Request URL: {url}")
                 r = await self.client.post(
-                    url,
+                    f"{GEMINI_BASE}/chat/completions",
                     headers=self._make_headers(key),
                     json=payload,
                     timeout=30.0,
                 )
-
-                # تسجيل الاستجابة لأغراض التصحيح
-                logger.debug(f"Response status: {r.status_code}")
-                if r.status_code != 200:
-                    logger.error(f"API error response: {r.text[:500]}")
 
                 if r.status_code == 429:
                     await self.orchestrator.report_error(ks, 429, "rate-limit")
@@ -470,10 +463,8 @@ class GeminiClient:
                     if isinstance(parsed, dict):
                         reply = parsed.get("reply", "").strip()
                     else:
-                        # إذا كان الناتج نصاً مباشراً
                         reply = str(parsed).strip()
                 except json.JSONDecodeError:
-                    # إذا لم يكن JSON صحيحاً، نستخدم النص الأصلي
                     reply = raw_text.strip()
 
                 if not reply:
@@ -489,7 +480,7 @@ class GeminiClient:
                 return {
                     "reply": reply,
                     "tokens_used": actual_tokens,
-                    "thought_signature": None,    # غير مدعوم في AnyAPI
+                    "thought_signature": None,
                     "thinking_level": "none",
                     "mood": "neutral",
                 }
