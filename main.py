@@ -42,7 +42,7 @@ if not GEMINI_KEYS:
 
 logger.info(f"✅ {len(GEMINI_KEYS)} Gemini key(s) loaded")
 
-MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-3.1-flash-lite")
+MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-3.1-flash-lite-preview")
 # نقطة نهاية Google Gemini API
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
