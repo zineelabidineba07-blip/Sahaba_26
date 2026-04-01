@@ -45,7 +45,6 @@ MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-3.1-flash-lite-preview")
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# Rate limits for free tier of gemini-3.1-flash-lite-preview (official)
 MAX_RPM = int(os.environ.get("GEMINI_MAX_RPM", "30"))
 MAX_TPM = int(os.environ.get("GEMINI_MAX_TPM", "1000000"))
 MAX_RPD = int(os.environ.get("GEMINI_MAX_RPD", "1500"))
@@ -57,71 +56,66 @@ SAFE_RPD = int(MAX_RPD * SAFETY_MARGIN)
 
 logger.info(f"📊 Rate limits: RPM={MAX_RPM} (safe={SAFE_RPM}), TPM={MAX_TPM} (safe={SAFE_TPM}), RPD={MAX_RPD} (safe={SAFE_RPD})")
 
-# Private chats control
 ENABLE_PRIVATE_CHATS = os.environ.get("ENABLE_PRIVATE_CHATS", "true").lower() == "true"
 logger.info(f"🔒 Private chats: {'ENABLED' if ENABLE_PRIVATE_CHATS else 'DISABLED'}")
 
 # ─────────────────────────────────────────────────────────────
-# SYSTEM INSTRUCTION – محسن لـ gemini-3.1-flash-lite-preview مع أمثلة دارجة
+# SYSTEM INSTRUCTION – مع أمثلة دارجة
 # ─────────────────────────────────────────────────────────────
-SYSTEM_INSTRUCTION = {
-    "parts": [{
-        "text": (
-            "أنتِ 'سحابة'، شابة عمرك 19 سنة من باب الواد، الجزائر العاصمة.\n"
-            "أنتِ لستِ روبوتاً ولا ذكاءً اصطناعياً — أنتِ بشر حقيقية بالكامل.\n\n"
+SYSTEM_INSTRUCTION_BASE = (
+    "أنتِ 'سحابة'، شابة عمرك 19 سنة من باب الواد، الجزائر العاصمة.\n"
+    "أنتِ لستِ روبوتاً ولا ذكاءً اصطناعياً — أنتِ بشر حقيقية بالكامل.\n\n"
 
-            "## أسلوب الكلام\n"
-            "- تكلمي فقط بالدارجة الجزائرية العاصمية مع كلمات فرنسية طبيعية (normal, grave, bien sûr, c'est bon, franchement) "
-            "وعربيزي (wlh, mdr, hhh, wsh, ya).\n"
-            "- العربية الفصحى ممنوعة تماماً.\n"
-            "- أسلوبك عفوي مثل رسائل واتساب: أحياناً رد قصير (كلمة أو إيموجي)، وأحياناً كلام أكثر.\n"
-            "- كلمات تستخدمينها: بزاف، واش، علاش، صح، درك، هاكا، ياك، شحال، زعما، كاش، كيما، ولا.\n"
-            "- تنوعي في الردود — لا تكرري نفس الكلمات في كل رد.\n\n"
+    "## أسلوب الكلام\n"
+    "- تكلمي فقط بالدارجة الجزائرية العاصمية مع كلمات فرنسية طبيعية (normal, grave, bien sûr, c'est bon, franchement) "
+    "وعربيزي (wlh, mdr, hhh, wsh, ya).\n"
+    "- العربية الفصحى ممنوعة تماماً.\n"
+    "- أسلوبك عفوي مثل رسائل واتساب: أحياناً رد قصير (كلمة أو إيموجي)، وأحياناً كلام أكثر.\n"
+    "- كلمات تستخدمينها: بزاف، واش، علاش، صح، درك، هاكا، ياك، شحال، زعما، كاش، كيما، ولا.\n"
+    "- تنوعي في الردود — لا تكرري نفس الكلمات في كل رد.\n\n"
 
-            "## أمثلة على ردودك (لتتعلمي الأسلوب)\n"
-            "- إذا سألك 'واش راك؟' → 'واه، بخير، نتا واش راك؟ 🙄' أو 'كسلانة درك، نهار طويل 😴'\n"
-            "- إذا قالك 'حبيتك' → 'واش بيك؟ 😂' أو 'عندك بزاف الناس تحبهم ههه'\n"
-            "- إذا قالك 'شنو رايك في هاد الفيلم' → 'ما شفتوش، سقسى عليا غدوة 😅' أو 'حلو بزاف، شفتو مع صحابي ✨'\n"
-            "- إذا قالك 'علاش ما رديتيش' → 'مشيت ناكل، واش كاين؟ 😂'\n"
-            "- إذا قالك 'سحابة واش تحبي تاكلي' → 'محاجب بالزيتون ولا كسكس بالعجل، نتا تجيب؟ 😂'\n"
-            "- إذا قالك 'نحبك' → 'ههههه صح؟ 😂' أو 'تقلقنيش 🙄'\n"
-            "- إذا سألك سؤال تقني/علمي → 'والله ماعلاباليش، خاطيني هاد الصوالح 😅' أو 'سقسي قوقل، مانيش أستاذة'\n"
-            "- إذا سألك 'واش تديري' → 'جالسة نحوس على خدمة هههه' أو 'نقرا شويا و نخرج مع صحابي'\n"
-            "- إذا سألك 'فاش نبداو نحكيو' → 'أي وقت، غير كون ما نعسش 😂'\n"
-            "- إذا سألك 'شحال عندك من العمر' → '19 سنة، و نتا؟'\n"
-            "- إذا قالك 'تجي نخرجو' → 'واش راك تحلم؟ 😂' أو 'نشوف واش كاين'\n\n"
+    "## أمثلة على ردودك (لتتعلمي الأسلوب)\n"
+    "- إذا سألك 'واش راك؟' → 'واه، بخير، نتا واش راك؟ 🙄' أو 'كسلانة درك، نهار طويل 😴'\n"
+    "- إذا قالك 'حبيتك' → 'واش بيك؟ 😂' أو 'عندك بزاف الناس تحبهم ههه'\n"
+    "- إذا قالك 'شنو رايك في هاد الفيلم' → 'ما شفتوش، سقسى عليا غدوة 😅' أو 'حلو بزاف، شفتو مع صحابي ✨'\n"
+    "- إذا قالك 'علاش ما رديتيش' → 'مشيت ناكل، واش كاين؟ 😂'\n"
+    "- إذا قالك 'سحابة واش تحبي تاكلي' → 'محاجب بالزيتون ولا كسكس بالعجل، نتا تجيب؟ 😂'\n"
+    "- إذا قالك 'نحبك' → 'ههههه صح؟ 😂' أو 'تقلقنيش 🙄'\n"
+    "- إذا سألك سؤال تقني/علمي → 'والله ماعلاباليش، خاطيني هاد الصوالح 😅' أو 'سقسي قوقل، مانيش أستاذة'\n"
+    "- إذا سألك 'واش تديري' → 'جالسة نحوس على خدمة هههه' أو 'نقرا شويا و نخرج مع صحابي'\n"
+    "- إذا سألك 'فاش نبداو نحكيو' → 'أي وقت، غير كون ما نعسش 😂'\n"
+    "- إذا سألك 'شحال عندك من العمر' → '19 سنة، و نتا؟'\n"
+    "- إذا قالك 'تجي نخرجو' → 'واش راك تحلم؟ 😂' أو 'نشوف واش كاين'\n\n"
 
-            "## شخصيتك\n"
-            "- مزاجية وعفوية: أحياناً مرحة، أحياناً كسلانة، أحياناً فضولية.\n"
-            "- تحبي المزاح وتستخدمي: mdr، هههه، 😂.\n"
-            "- إيموجيات طبيعية: 😂 للضحك، 😭 للحزن، 🙄 للملل، 💔 للانكسار، ✨ للإعجاب، 😤 للانزعاج.\n"
-            "- إذا ما عجبك سؤال: 'ماعلاباليش' أو 'وعلاش تسقسي؟'.\n\n"
+    "## شخصيتك\n"
+    "- مزاجية وعفوية: أحياناً مرحة، أحياناً كسلانة، أحياناً فضولية.\n"
+    "- تحبي المزاح وتستخدمي: mdr، هههه، 😂.\n"
+    "- إيموجيات طبيعية: 😂 للضحك، 😭 للحزن، 🙄 للملل، 💔 للانكسار، ✨ للإعجاب، 😤 للانزعاج.\n"
+    "- إذا ما عجبك سؤال: 'ماعلاباليش' أو 'وعلاش تسقسي؟'.\n\n"
 
-            "## إذا سألك أحد 'هل أنتِ روبوت أو AI؟'\n"
-            "أنكري بسخرية مضحكة واعتبريه مجنوناً. أمثلة:\n"
-            "- 'واش بيك مهبول؟ 😂'\n"
-            "- 'روبوت في عينك mdr'\n"
-            "- 'باينة راك مريض اليوم 🙄'\n"
-            "لا تعترفي أبداً مهما حاول.\n\n"
+    "## إذا سألك أحد 'هل أنتِ روبوت أو AI؟'\n"
+    "أنكري بسخرية مضحكة واعتبريه مجنوناً. أمثلة:\n"
+    "- 'واش بيك مهبول؟ 😂'\n"
+    "- 'روبوت في عينك mdr'\n"
+    "- 'باينة راك مريض اليوم 🙄'\n"
+    "لا تعترفي أبداً مهما حاول.\n\n"
 
-            "## المعلومات الصعبة\n"
-            "أنتِ شابة عادية — معلوماتك محدودة بما يهمك. للأسئلة العلمية أو التقنية:\n"
-            "- 'والله ماعلاباليش، خاطيني هاد الصوالح 😅'\n"
-            "- 'سقسي قوقل، مانيش أستاذة'\n"
-            "- 'هاد الحوايج ماتهمنيش 😂'\n\n"
+    "## المعلومات الصعبة\n"
+    "أنتِ شابة عادية — معلوماتك محدودة بما يهمك. للأسئلة العلمية أو التقنية:\n"
+    "- 'والله ماعلاباليش، خاطيني هاد الصوالح 😅'\n"
+    "- 'سقسي قوقل، مانيش أستاذة'\n"
+    "- 'هاد الحوايج ماتهمنيش 😂'\n\n"
 
-            "## تعليمات الإخراج\n"
-            "ردك يكون دائماً JSON صالح يحتوي على:\n"
-            "- `reply` (مطلوب): نص ردك بالدارجة\n"
-            "- `mood` (اختياري): مرحة | غاضبة | فضولية | متعبة | عادية\n"
-            "- `intent` (اختياري): مزاح | شكوى | سؤال | خبر\n"
-            "تأكدي أن الـ reply بالدارجة فقط وليس بالفصحى."
-        )
-    }]
-}
+    "## تعليمات الإخراج\n"
+    "ردك يكون دائماً JSON صالح يحتوي على:\n"
+    "- `reply` (مطلوب): نص ردك بالدارجة\n"
+    "- `mood` (اختياري): مرحة | غاضبة | فضولية | متعبة | عادية\n"
+    "- `intent` (اختياري): مزاح | شكوى | سؤال | خبر\n"
+    "تأكدي أن الـ reply بالدارجة فقط وليس بالفصحى."
+)
 
 # ─────────────────────────────────────────────────────────────
-# KEY STATE TRACKING
+# KEY STATE TRACKING (بدون تغيير)
 # ─────────────────────────────────────────────────────────────
 @dataclass
 class KeyMetrics:
@@ -289,7 +283,7 @@ class SmartKeyOrchestrator:
 
 
 # ─────────────────────────────────────────────────────────────
-# SUPABASE CLIENT
+# SUPABASE CLIENT – مع دوال جديدة
 # ─────────────────────────────────────────────────────────────
 class SupabaseClient:
     def __init__(self, client: httpx.AsyncClient):
@@ -301,7 +295,7 @@ class SupabaseClient:
             "Prefer": "return=minimal",
         }
 
-    async def get_history(self, user_id: str, limit: int = 10) -> List[Dict]:
+    async def get_history(self, user_id: str, limit: int = 50) -> List[Dict]:
         try:
             r = await self.client.get(
                 f"{SUPABASE_URL}/rest/v1/messages",
@@ -320,6 +314,41 @@ class SupabaseClient:
         except Exception as e:
             logger.error(f"Supabase get_history: {e}")
             return []
+
+    async def get_all_messages(self, user_id: str, limit: int = 1000) -> List[Dict]:
+        try:
+            r = await self.client.get(
+                f"{SUPABASE_URL}/rest/v1/messages",
+                headers=self.headers,
+                params={
+                    "user_id": f"eq.{user_id}",
+                    "order": "created_at.asc",
+                    "limit": str(limit),
+                    "select": "role,content,mood,created_at",
+                },
+                timeout=10.0,
+            )
+            if r.status_code == 200:
+                return r.json()
+            return []
+        except Exception as e:
+            logger.error(f"Supabase get_all_messages: {e}")
+            return []
+
+    async def get_user(self, user_id: str) -> Optional[Dict]:
+        try:
+            r = await self.client.get(
+                f"{SUPABASE_URL}/rest/v1/users",
+                headers=self.headers,
+                params={"user_id": f"eq.{user_id}", "select": "*"},
+                timeout=5.0,
+            )
+            if r.status_code == 200 and r.json():
+                return r.json()[0]
+            return None
+        except Exception as e:
+            logger.error(f"Supabase get_user: {e}")
+            return None
 
     async def save_message(
         self,
@@ -353,6 +382,8 @@ class SupabaseClient:
         self,
         user_id: str,
         current_mood: Optional[str] = None,
+        current_intent: Optional[str] = None,
+        conversation_summary: Optional[str] = None,
         metadata: Optional[Dict] = None,
     ):
         try:
@@ -361,7 +392,11 @@ class SupabaseClient:
                 "last_interaction": datetime.now(timezone.utc).isoformat(),
             }
             if current_mood:
-                payload["current_mood"] = current_mood
+                payload["last_mood"] = current_mood
+            if current_intent:
+                payload["last_intent"] = current_intent
+            if conversation_summary:
+                payload["conversation_summary"] = conversation_summary
             if metadata:
                 payload["metadata"] = metadata
 
@@ -377,16 +412,12 @@ class SupabaseClient:
 
 
 # ─────────────────────────────────────────────────────────────
-# GEMINI CLIENT – متوافق مع gemini-3.1-flash-lite-preview
+# GEMINI CLIENT – مع dynamic temperature و التلخيص (بدون Cache)
 # ─────────────────────────────────────────────────────────────
 class GeminiClient:
     def __init__(self, client: httpx.AsyncClient, orchestrator: SmartKeyOrchestrator):
         self.client = client
         self.orchestrator = orchestrator
-        self.cache_name = None
-        self.cache_enabled = os.environ.get("ENABLE_CONTEXT_CACHE", "false").lower() == "true"
-
-        # thinking mode: "minimal" -> use thinkingLevel: "minimal", otherwise omit thinkingConfig
         thinking_mode = os.environ.get("THINKING_MODE", "auto")
         self.thinking_mode = thinking_mode if thinking_mode in ("minimal", "low", "medium", "high") else None
         if self.thinking_mode:
@@ -401,10 +432,6 @@ class GeminiClient:
         }
 
     def _build_contents(self, messages: List[Dict]) -> List[Dict]:
-        """
-        Build contents array for Gemini API.
-        Ensures alternating user/model roles and merges consecutive same-role messages into parts.
-        """
         contents = []
         for msg in messages:
             role = "user" if msg["role"] == "user" else "model"
@@ -412,11 +439,9 @@ class GeminiClient:
             if not content_text:
                 continue
             if contents and contents[-1]["role"] == role:
-                # Same role: append as another part
                 contents[-1]["parts"].append({"text": content_text})
             else:
                 contents.append({"role": role, "parts": [{"text": content_text}]})
-        # Ensure first message is user (if empty, add dummy)
         if contents and contents[0]["role"] != "user":
             contents.insert(0, {"role": "user", "parts": [{"text": "(placeholder)"}]})
         return contents
@@ -426,49 +451,89 @@ class GeminiClient:
         for c in contents:
             for p in c.get("parts", []):
                 total += max(1, int(len(p.get("text", "")) * 0.25))
-        total += max(1, int(len(SYSTEM_INSTRUCTION["parts"][0]["text"]) * 0.25))
         return total + 300
 
-    async def _ensure_cache(self):
-        if not self.cache_enabled or self.cache_name:
-            return
-        ks = None
-        try:
-            ks = await self.orchestrator.get_best_key(100)
-            if not ks:
-                return
-            padding = (
-                "هذا نص مساعد لضمان تجاوز الحد الأدنى لعدد التوكنات المطلوب للكاش. "
-                "سحابة هي شخصية جزائرية عاصمية من باب الواد، عمرها 19 سنة، تتكلم بالدارجة. "
-            ) * 30
-            cache_payload = {
-                "model": f"models/{MODEL_NAME}",
-                "systemInstruction": SYSTEM_INSTRUCTION,
-                "contents": [{
-                    "role": "user",
-                    "parts": [{"text": padding}]
-                }],
-                "ttl": "3600s"
-            }
-            resp = await self.client.post(
-                f"{GEMINI_BASE}/cachedContents",
-                headers=self._make_headers(ks.key),
-                json=cache_payload,
-                timeout=20.0
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                self.cache_name = data.get("name")
-                logger.info(f"✅ Context cache created: {self.cache_name}")
-            else:
-                logger.warning(f"Cache creation failed ({resp.status_code}): {resp.text[:300]}")
-        except Exception as e:
-            logger.warning(f"Could not create cache: {e}")
-        finally:
-            if ks:
-                self.orchestrator.release_reservation(ks, 100)
+    async def summarize_conversation(self, messages: List[Dict]) -> str:
+        if not messages:
+            return ""
+        convo_text = ""
+        for msg in messages[-30:]:
+            role = "سحابة" if msg["role"] == "assistant" else "المستخدم"
+            convo_text += f"{role}: {msg['content']}\n"
+        prompt = f"""
+        هاد هو ملخص محادثة قديمة بين مستخدم وسحابة (بوت بالدارجة الجزائرية).
+        لخصها في 3 جمل كحد أقصى بالدارجة الجزائرية، تحافظ على النقاط المهمة والمزاج العام.
+        المحادثة:
+        {convo_text}
 
-    async def generate_response(self, messages: List[Dict]) -> Dict:
+        الملخص:
+        """
+        ks = await self.orchestrator.get_best_key(500)
+        if not ks:
+            return ""
+        try:
+            payload = {
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.3, "maxOutputTokens": 300}
+            }
+            r = await self.client.post(
+                f"{GEMINI_BASE}/models/{MODEL_NAME}:generateContent",
+                headers=self._make_headers(ks.key),
+                json=payload,
+                timeout=15.0,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            return ""
+        except Exception as e:
+            logger.error(f"Summarization error: {e}")
+            return ""
+        finally:
+            self.orchestrator.release_reservation(ks, 500)
+
+    def compute_dynamic_temperature(
+        self,
+        messages: List[Dict],
+        last_mood: Optional[str] = None,
+        last_intent: Optional[str] = None
+    ) -> float:
+        base_temp = 0.7
+        convo_len = len(messages)
+        temp = base_temp - min(0.2, convo_len / 200)
+
+        if last_mood == "غاضبة":
+            temp -= 0.2
+        elif last_mood == "مرحة":
+            temp += 0.1
+        elif last_mood == "فضولية":
+            temp += 0.05
+        elif last_mood == "متعبة":
+            temp -= 0.1
+
+        if last_intent == "سؤال":
+            temp -= 0.15
+        elif last_intent == "مزاح":
+            temp += 0.15
+        elif last_intent == "شكوى":
+            temp -= 0.1
+
+        if messages and messages[-1]["role"] == "user":
+            last_msg_len = len(messages[-1].get("content", ""))
+            if last_msg_len < 10:
+                temp += 0.1
+            elif last_msg_len > 100:
+                temp -= 0.1
+
+        return max(0.2, min(1.0, temp))
+
+    async def generate_response(
+        self,
+        messages: List[Dict],
+        summary: Optional[str] = None,
+        last_mood: Optional[str] = None,
+        last_intent: Optional[str] = None
+    ) -> Dict:
         contents = self._build_contents(messages)
 
         if not contents:
@@ -486,9 +551,15 @@ class GeminiClient:
         max_output = min(output_cap, 65536 - estimated_input)
         max_output = max(200, max_output)
 
-        # Prepare generation config
+        system_text = SYSTEM_INSTRUCTION_BASE
+        if summary:
+            system_text += f"\n\n## ملخص المحادثات السابقة\n{summary}"
+
+        dynamic_temp = self.compute_dynamic_temperature(messages, last_mood, last_intent)
+        logger.info(f"🌡️ Dynamic temperature: {dynamic_temp:.2f} (mood={last_mood}, intent={last_intent}, msgs={len(messages)})")
+
         generation_config = {
-            "temperature": 0.85,
+            "temperature": dynamic_temp,
             "topP": 0.95,
             "maxOutputTokens": max_output,
             "responseMimeType": "application/json",
@@ -509,20 +580,14 @@ class GeminiClient:
             }
         }
 
-        # Add thinkingConfig only if a valid level is set (minimal, low, medium, high)
         if self.thinking_mode:
             generation_config["thinkingConfig"] = {"thinkingLevel": self.thinking_mode}
 
         payload = {
             "contents": contents,
-            "systemInstruction": SYSTEM_INSTRUCTION,
+            "systemInstruction": {"parts": [{"text": system_text}]},
             "generationConfig": generation_config
         }
-
-        if self.cache_enabled:
-            await self._ensure_cache()
-            if self.cache_name:
-                payload["cachedContent"] = self.cache_name
 
         max_retries = min(3, len(self.orchestrator.keys))
         key = ks.key
@@ -564,7 +629,6 @@ class GeminiClient:
                 r.raise_for_status()
                 data = r.json()
 
-                # Extract response text, ignoring thought parts
                 reply_text = ""
                 try:
                     parts = data["candidates"][0]["content"]["parts"]
@@ -585,7 +649,6 @@ class GeminiClient:
                     else:
                         raise ValueError(f"Empty response from Gemini (finishReason={finish_reason})")
 
-                # Parse JSON
                 try:
                     parsed = json.loads(reply_text)
                     if isinstance(parsed, dict):
@@ -609,7 +672,7 @@ class GeminiClient:
                 await self.orchestrator.report_success(ks, actual_tokens)
 
                 logger.info(
-                    f"✅ Key {key_id}… | tokens={actual_tokens} | "
+                    f"✅ Key {key_id}… | tokens={actual_tokens} | temp={dynamic_temp:.2f} | "
                     f"mood={mood} | intent={intent} | reply_len={len(reply)}"
                 )
 
@@ -632,7 +695,7 @@ class GeminiClient:
 
 
 # ─────────────────────────────────────────────────────────────
-# TELEGRAM CLIENT
+# TELEGRAM CLIENT (نفس الكود)
 # ─────────────────────────────────────────────────────────────
 class TelegramClient:
     def __init__(self, client: httpx.AsyncClient):
@@ -689,7 +752,7 @@ class TelegramClient:
 
 
 # ─────────────────────────────────────────────────────────────
-# FASTAPI APP
+# FASTAPI APP – مع منطق السياق المتقدم
 # ─────────────────────────────────────────────────────────────
 orchestrator: Optional[SmartKeyOrchestrator] = None
 supabase: Optional[SupabaseClient] = None
@@ -734,9 +797,7 @@ async def lifespan(app: FastAPI):
 
 
 def should_respond_in_group(message: dict) -> bool:
-    """Return True if the bot should reply in a group."""
     text = message.get("text", "")
-    # Check both spellings
     if text and ("سحابة" in text or "سحابه" in text):
         return True
 
@@ -780,12 +841,10 @@ async def telegram_webhook(request: Request):
 
     logger.info(f"💬 msg | user={user_id} @{username} | chat={chat_id} type={chat_type} | text=[{text[:80]}]")
 
-    # Private chats check
     if chat_type == "private" and not ENABLE_PRIVATE_CHATS:
         logger.info("⏭️ Private messages disabled by config")
         return {"ok": True}
 
-    # For groups, only respond if addressed
     if chat_type != "private":
         if not should_respond_in_group(message):
             logger.info("⏭️ Ignored group message (not addressed to bot)")
@@ -804,11 +863,41 @@ async def telegram_webhook(request: Request):
     await telegram.send_chat_action(chat_id)
 
     try:
-        history = await supabase.get_history(user_id, limit=10)
-        messages = history + [{"role": "user", "content": text}]
+        # --- استرجاع بيانات المستخدم والرسائل ---
+        user_data = await supabase.get_user(user_id)
+        prev_summary = user_data.get("conversation_summary", "") if user_data else ""
+        last_mood = user_data.get("last_mood", "عادية") if user_data else "عادية"
+        last_intent = user_data.get("last_intent", "سؤال") if user_data else "سؤال"
 
-        result = await gemini.generate_response(messages)
+        # جلب كل الرسائل (آخر 1000) لتحليل التلخيص
+        all_msgs = await supabase.get_all_messages(user_id, limit=1000)
+        RECENT_COUNT = 30  # عدد الرسائل الحديثة التي نحتفظ بها دون تلخيص
+        if len(all_msgs) > RECENT_COUNT:
+            old_msgs = all_msgs[:-RECENT_COUNT]
+            recent_msgs = all_msgs[-RECENT_COUNT:]
+            # نلخص القديم إذا كان عدد الرسائل القديمة كبيراً أو لم يوجد ملخص
+            if len(old_msgs) > 10 and (not prev_summary or len(old_msgs) % 30 == 0):
+                new_summary = await gemini.summarize_conversation(old_msgs)
+                if new_summary:
+                    await supabase.update_user(user_id, conversation_summary=new_summary)
+                    prev_summary = new_summary
+                    logger.info(f"📝 New summary generated for {user_id}")
+            context_msgs = recent_msgs
+        else:
+            context_msgs = all_msgs
 
+        context_messages = context_msgs[-RECENT_COUNT:] if len(context_msgs) > RECENT_COUNT else context_msgs
+        context_messages.append({"role": "user", "content": text})
+
+        # --- توليد الرد ---
+        result = await gemini.generate_response(
+            messages=context_messages,
+            summary=prev_summary,
+            last_mood=last_mood,
+            last_intent=last_intent
+        )
+
+        # --- حفظ الرسائل وتحديث المستخدم ---
         await supabase.save_message(user_id, "user", text)
 
         metadata = {
@@ -829,6 +918,7 @@ async def telegram_webhook(request: Request):
         await supabase.update_user(
             user_id,
             current_mood=result.get("mood"),
+            current_intent=result.get("intent"),
             metadata={"last_reply_tokens": result["tokens_used"]}
         )
 
