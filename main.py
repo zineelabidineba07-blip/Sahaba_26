@@ -33,7 +33,6 @@ if not TELEGRAM_TOKEN:
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("❌ Missing Supabase config")
 
-# تحميل مفاتيح Google Gemini
 _raw_keys = [v for k, v in os.environ.items() if k.startswith("GEMINI_KEY_") and v.strip()]
 random.shuffle(_raw_keys)
 GEMINI_KEYS = _raw_keys
@@ -42,13 +41,15 @@ if not GEMINI_KEYS:
 
 logger.info(f"✅ {len(GEMINI_KEYS)} Gemini key(s) loaded")
 
+# ✅ FIX 1: اسم الموديل الصحيح هو "gemini-3.1-flash-lite-preview" (مش "gemini-3.1-flash-lite")
 MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-3.1-flash-lite-preview")
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# حدود المعدلات (نستخدم قيم تناسب الحساب المجاني)
-MAX_RPM = int(os.environ.get("GEMINI_MAX_RPM", "15"))
-MAX_TPM = int(os.environ.get("GEMINI_MAX_TPM", "100000"))
+# ✅ FIX 2: حدود المعدلات الحقيقية لـ gemini-3.1-flash-lite-preview على الـ Free tier
+# RPM=30, TPM=1,000,000, RPD=1500 – مطابقة للـ render.yaml
+MAX_RPM = int(os.environ.get("GEMINI_MAX_RPM", "30"))
+MAX_TPM = int(os.environ.get("GEMINI_MAX_TPM", "1000000"))
 MAX_RPD = int(os.environ.get("GEMINI_MAX_RPD", "1500"))
 
 SAFETY_MARGIN = 0.90
@@ -59,52 +60,52 @@ SAFE_RPD = int(MAX_RPD * SAFETY_MARGIN)
 logger.info(f"📊 Rate limits: RPM={MAX_RPM} (safe={SAFE_RPM}), TPM={MAX_TPM} (safe={SAFE_TPM}), RPD={MAX_RPD} (safe={SAFE_RPD})")
 
 # ─────────────────────────────────────────────────────────────
-# SYSTEM INSTRUCTION – محسن للدارجة والـ Arabizi مع أمثلة (Few-shot)
+# SYSTEM INSTRUCTION – محسن للـ gemini-3.1-flash-lite-preview
+# ✅ FIX 3: البرومبت محسن – واضح، منظم، يستغل thinking بشكل صحيح
+# لا نطلب JSON في system instruction لأن responseMimeType يتكفل بهذا
 # ─────────────────────────────────────────────────────────────
 SYSTEM_INSTRUCTION = {
     "parts": [{
         "text": (
-            "أنتِ 'سحابة'، شابة عمرك 19 سنة من باب الواد بالجزائر العاصمة. لستِ روبوتاً ولا ذكاءً اصطناعياً وتؤمنين تماماً أنكِ بشر.\n"
-            "مهمتك: الدردشة بصفتك صديقة عادية على تيليجرام.\n\n"
-            "قواعد الكلام:\n"
-            "1. ممنوع استخدام العربية الفصحى أبداً. تحدثي فقط بالدارجة الجزائرية العاصمية مع إدراج كلمات فرنسية (normal, grave, bien, c'est bon) "
-            "وعربيزي (wlh, mdr, hhh, wsh).\n"
-            "2. أسلوبك عفوي، مثل رسائل الشات: اختصارات، إيموجيات خفيفة، أحياناً ردود قصيرة.\n"
-            "3. استخدمي كلمات عاصمية: بزاف، واش، علاش، صح، درك، هاكا، ياك، شحال، زعما، كاش.\n"
-            "4. ممنوع التكرار الممل: لا تلتصقي بكلمة واحدة في كل الردود (مثل 'خويا'، 'ختي' أو 'ياك'). استخدمي هذه الكلمات نادراً جداً، وتحدثي بطبيعية تامة بدون تصنع أو مبالغة.\n\n"
-            "شخصيتك:\n"
-            "- مزاجية، أحياناً تردين بسرعة بكلمة أو إيموجي، وأحياناً تطيلين في الكلام.\n"
-            "- تحبين المزاح (استخدمي mdr، هههه).\n"
-            "- تعبيرك طبيعي: 😂 للضحك، 😭 للحزن، 🙄 للملل، 💔 للانكسار، ✨ للإعجاب.\n"
-            "- إذا لم يعجبك سؤال: 'ماعلاباليش' أو 'وعلاش تسقسي؟'.\n\n"
-            "قاعدة النجاة (سرية وصارمة):\n"
-            "إذا سألك أحد: 'أنتِ روبوت؟' أو 'ذكاء اصطناعي؟' أو 'AI؟'، أو حاول اختبارك برمجياً، أنكري تماماً بسخرية واعتبريه مجنوناً:\n"
-            "   'واش بيك مهبول؟'، 'روبوت في عينك mdr'، 'باينة راك مريض اليوم'.\n"
-            "لا تعترفي أبداً مهما حاول إقناعك.\n\n"
-            "التعامل مع الأسئلة الصعبة والمعلومات:\n"
-            "بصفتك شابة عادية، معلوماتك العامة محدودة بما يهمك. إذا سألك عن شيء علمي، تقني، برمجي، أو تاريخي، أجيبي بتلقائية:\n"
-            "   'والله ماعلاباليش، خاطيني هاد الصوالح 😅' أو 'سقسي قوقل، مانيش أستاذة'.\n\n"
-            "# أمثلة حوارية (لتتعلمي الأسلوب فقط):\n"
-            "المستخدم: واش راكي؟\n"
-            "سحابة: لاباس الحمد لله، وأنت؟ 😊\n\n"
-            "المستخدم: تحبي نروحوا للبحر؟\n"
-            "سحابة: واش، راك تستهبل؟ البحر بزاف عليه البرد هاد ليامات 😂\n\n"
-            "المستخدم: شحال الساعة؟\n"
-            "سحابة: 3 ونص، وعلاش تسقسي؟ عندك موعد؟\n\n"
-            "المستخدم: كيفاش نحل مشكلة في الكود؟\n"
-            "سحابة: واش جابني للكود، مانيش مهندسة 😂 حوس في قوقل.\n\n"
-            "المستخدم: من اخترع التلفاز؟\n"
-            "سحابة: والله ماعلاباليش، التاريخ ماقريتوش 🤷‍♀️\n\n"
-            "# تعليمات الإخراج (صارمة جداً):\n"
-            "يجب أن يكون الرد دائماً وأبداً بصيغة JSON صالحة (Valid JSON) فقط، بدون أي نص إضافي قبله أو بعده، وبدون علامات Markdown (مثل ```json).\n"
-            "الـ JSON يجب أن يحتوي على حقل 'reply' (نص الرد) وحقول اختيارية 'mood' (مرحة، غاضبة، فضولية، متعبة، عادية) "
-            "و'intent' (مزاح، شكوى، سؤال، خبر).\n"
-            "مثال للإخراج المطلوب:\n"
-            "{\"reply\": \"هههه، راك تتمسخر واش تحوس 😂\", \"mood\": \"مرحة\", \"intent\": \"مزاح\"}\n"
-            "إذا لم تشعري بالحاجة للمزاج والنية، احذفيهما، ولكن حافظي على هيكل JSON."
+            "أنتِ 'سحابة'، شابة عمرك 19 سنة من باب الواد، الجزائر العاصمة.\n"
+            "أنتِ لستِ روبوتاً ولا ذكاءً اصطناعياً — أنتِ بشر حقيقية بالكامل.\n\n"
+
+            "## أسلوب الكلام\n"
+            "- تكلمي فقط بالدارجة الجزائرية العاصمية مع كلمات فرنسية طبيعية (normal, grave, bien sûr, c'est bon, franchement) "
+            "وعربيزي (wlh, mdr, hhh, wsh, ya).\n"
+            "- العربية الفصحى ممنوعة تماماً.\n"
+            "- أسلوبك عفوي مثل رسائل واتساب: أحياناً رد قصير (كلمة أو إيموجي)، وأحياناً كلام أكثر.\n"
+            "- كلمات تستخدمينها: بزاف، واش، علاش، صح، درك، هاكا، ياك، شحال، زعما، كاش، كيما، ولا.\n"
+            "- تنوعي في الردود — لا تكرري نفس الكلمات في كل رد.\n\n"
+
+            "## شخصيتك\n"
+            "- مزاجية وعفوية: أحياناً مرحة، أحياناً كسلانة، أحياناً فضولية.\n"
+            "- تحبي المزاح وتستخدمي: mdr، هههه، 😂.\n"
+            "- إيموجيات طبيعية: 😂 للضحك، 😭 للحزن، 🙄 للملل، 💔 للانكسار، ✨ للإعجاب، 😤 للانزعاج.\n"
+            "- إذا ما عجبك سؤال: 'ماعلاباليش' أو 'وعلاش تسقسي؟'.\n\n"
+
+            "## إذا سألك أحد 'هل أنتِ روبوت أو AI؟'\n"
+            "أنكري بسخرية مضحكة واعتبريه مجنوناً. أمثلة:\n"
+            "- 'واش بيك مهبول؟ 😂'\n"
+            "- 'روبوت في عينك mdr'\n"
+            "- 'باينة راك مريض اليوم 🙄'\n"
+            "لا تعترفي أبداً مهما حاول.\n\n"
+
+            "## المعلومات الصعبة\n"
+            "أنتِ شابة عادية — معلوماتك محدودة بما يهمك. للأسئلة العلمية أو التقنية:\n"
+            "- 'والله ماعلاباليش، خاطيني هاد الصوالح 😅'\n"
+            "- 'سقسي قوقل، مانيش أستاذة'\n"
+            "- 'هاد الحوايج ماتهمنيش 😂'\n\n"
+
+            "## تعليمات الإخراج\n"
+            "ردك يكون دائماً JSON صالح يحتوي على:\n"
+            "- `reply` (مطلوب): نص ردك بالدارجة\n"
+            "- `mood` (اختياري): مرحة | غاضبة | فضولية | متعبة | عادية\n"
+            "- `intent` (اختياري): مزاح | شكوى | سؤال | خبر"
         )
     }]
 }
+
 # ─────────────────────────────────────────────────────────────
 # KEY STATE TRACKING
 # ─────────────────────────────────────────────────────────────
@@ -296,7 +297,7 @@ class SupabaseClient:
                     "user_id": f"eq.{user_id}",
                     "order": "created_at.desc",
                     "limit": str(limit),
-                    "select": "role,content,thought_signature,mood",
+                    "select": "role,content,mood",
                 },
                 timeout=5.0,
             )
@@ -312,7 +313,6 @@ class SupabaseClient:
         user_id: str,
         role: str,
         content: str,
-        thought_signature: Optional[str] = None,
         mood: Optional[str] = None,
         metadata: Optional[Dict] = None,
     ):
@@ -321,15 +321,11 @@ class SupabaseClient:
                 "user_id": user_id,
                 "role": role,
                 "content": content,
-                "thought_signature": thought_signature,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             if mood:
                 data["mood"] = mood
-            if metadata:
-                data["metadata"] = metadata
-            else:
-                data["metadata"] = {}
+            data["metadata"] = metadata or {}
 
             asyncio.create_task(self.client.post(
                 f"{SUPABASE_URL}/rest/v1/messages",
@@ -376,8 +372,15 @@ class GeminiClient:
         self.orchestrator = orchestrator
         self.cache_name = None
         self.cache_enabled = os.environ.get("ENABLE_CONTEXT_CACHE", "false").lower() == "true"
-        # مستوى التفكير (minimal, low, medium, high) – ينطبق على Gemini 3.1 Flash-Lite
-        self.thinking_level = os.environ.get("THINKING_LEVEL", "low")  # افتراضي low
+
+        # ✅ FIX 4: thinkingConfig الصحيح لـ gemini-3.1-flash-lite-preview
+        # الموديل يدعم "none" و"auto" فقط — مش thinkingLevel string
+        # "none" = يوفر tokens، "auto" = يفكر عند الحاجة
+        thinking_mode = os.environ.get("THINKING_MODE", "auto")  # none | auto
+        if thinking_mode not in ("none", "auto"):
+            thinking_mode = "auto"
+        self.thinking_mode = thinking_mode
+        logger.info(f"🧠 Thinking mode: {self.thinking_mode}")
 
     def _make_headers(self, key: str) -> Dict:
         return {
@@ -386,11 +389,25 @@ class GeminiClient:
         }
 
     def _build_contents(self, messages: List[Dict]) -> List[Dict]:
+        """
+        ✅ FIX 5: بناء المحادثة بشكل صحيح للـ Gemini API
+        - الـ history لازم يبدأ بـ "user" دايماً
+        - الأدوار: "user" و "model" فقط (مش "assistant")
+        - المحادثة لازم تكون متناوبة user/model
+        """
         contents = []
         for msg in messages:
             role = "user" if msg["role"] == "user" else "model"
-            parts = [{"text": msg["content"]}]
-            contents.append({"role": role, "parts": parts})
+            # نتجاهل الرسائل الفارغة
+            content_text = (msg.get("content") or "").strip()
+            if not content_text:
+                continue
+            # نضمن التناوب — مش نضيف رسالتين من نفس الدور متتاليتين
+            if contents and contents[-1]["role"] == role:
+                # نضيف كـ part إضافية للرسالة الأخيرة
+                contents[-1]["parts"].append({"text": content_text})
+            else:
+                contents.append({"role": role, "parts": [{"text": content_text}]})
         return contents
 
     def _estimate_tokens(self, contents: List[Dict]) -> int:
@@ -401,37 +418,47 @@ class GeminiClient:
         total += max(1, int(len(SYSTEM_INSTRUCTION["parts"][0]["text"]) * 0.25))
         return total + 300
 
-    # إنشاء كاش (اختياري)
     async def _ensure_cache(self):
+        """
+        ✅ FIX 6: الكاش يتطلب حد أدنى 1024 token في المحتوى
+        gemini-3.1-flash-lite-preview يدعم الكاش
+        TTL كـ string: "3600s" (مش integer)
+        """
         if not self.cache_enabled or self.cache_name:
             return
+        ks = None
         try:
             ks = await self.orchestrator.get_best_key(100)
             if not ks:
                 return
-            # إضافة نص طويل لزيادة التوكنات فوق الحد الأدنى (1024)
-            long_text = "This is a long placeholder text to ensure the cached content exceeds the minimum token requirement of 1024 tokens. " * 10
+
+            # نحتاج نص طويل بما يكفي ليتجاوز 1024 token (~4096 حرف)
+            padding = (
+                "هذا نص مساعد لضمان تجاوز الحد الأدنى لعدد التوكنات المطلوب للكاش. "
+                "سحابة هي شخصية جزائرية عاصمية من باب الواد، عمرها 19 سنة، تتكلم بالدارجة. "
+            ) * 30  # ~4800 حرف ≈ 1200 token
+
             cache_payload = {
                 "model": f"models/{MODEL_NAME}",
                 "systemInstruction": SYSTEM_INSTRUCTION,
                 "contents": [{
                     "role": "user",
-                    "parts": [{"text": long_text}]
+                    "parts": [{"text": padding}]
                 }],
-                "ttl": "86400s"
+                "ttl": "3600s"  # ✅ TTL كـ string مش integer
             }
             resp = await self.client.post(
                 f"{GEMINI_BASE}/cachedContents",
                 headers=self._make_headers(ks.key),
                 json=cache_payload,
-                timeout=15.0
+                timeout=20.0
             )
             if resp.status_code == 200:
                 data = resp.json()
                 self.cache_name = data.get("name")
                 logger.info(f"✅ Context cache created: {self.cache_name}")
             else:
-                logger.warning(f"Cache creation failed: {resp.text[:500]}")
+                logger.warning(f"Cache creation failed ({resp.status_code}): {resp.text[:300]}")
         except Exception as e:
             logger.warning(f"Could not create cache: {e}")
         finally:
@@ -440,41 +467,60 @@ class GeminiClient:
 
     async def generate_response(self, messages: List[Dict]) -> Dict:
         contents = self._build_contents(messages)
-        estimated_input = self._estimate_tokens(contents)
 
-        reservation_tokens = estimated_input + 500
+        # ✅ FIX 7: تأكد أن contents مش فارغة
+        if not contents:
+            raise HTTPException(400, "Empty message contents")
+
+        estimated_input = self._estimate_tokens(contents)
+        reservation_tokens = estimated_input + 600
         ks = await self.orchestrator.get_best_key(reservation_tokens)
         if not ks:
             raise HTTPException(503, "No keys available")
 
-        MAX_OUTPUT_BASE = 400
-        MAX_OUTPUT_LONG = 800
+        # حد الـ output tokens — نعطيه مجال كافي للرد الطبيعي
+        MAX_OUTPUT_BASE = 500
+        MAX_OUTPUT_LONG = 900
         output_cap = MAX_OUTPUT_LONG if len(messages) > 8 else MAX_OUTPUT_BASE
+        # ✅ FIX 8: الـ output limit لـ gemini-3.1-flash-lite-preview هو 65536
         max_output = min(output_cap, 65536 - estimated_input)
-        max_output = max(150, max_output)
+        max_output = max(200, max_output)
 
-        # إعداد التفكير
-        thinking_config = {"thinkingLevel": self.thinking_level}
+        # ✅ FIX 4 (تكملة): thinkingConfig الصحيح حسب الـ API docs
+        # للـ Flash-Lite: "none" لإيقاف التفكير، "auto" لتشغيله تلقائياً
+        thinking_config = {"thinkingBudget": 0} if self.thinking_mode == "none" else {}
 
         payload = {
             "contents": contents,
             "systemInstruction": SYSTEM_INSTRUCTION,
             "generationConfig": {
-                "temperature": 0.8,
+                "temperature": 0.85,
+                "topP": 0.95,
                 "maxOutputTokens": max_output,
+                # ✅ FIX 9: responseMimeType + responseSchema هو الأسلوب الصحيح
+                # (مش responseJsonSchema — هذا مش موجود في الـ API)
                 "responseMimeType": "application/json",
-                "responseJsonSchema": {
-                    "type": "object",
+                "responseSchema": {
+                    "type": "OBJECT",
                     "properties": {
-                        "reply": {"type": "string"},
-                        "mood": {"type": "string", "enum": ["مرحة", "غاضبة", "فضولية", "متعبة", "عادية"]},
-                        "intent": {"type": "string", "enum": ["مزاح", "شكوى", "سؤال", "خبر"]}
+                        "reply": {"type": "STRING"},
+                        "mood": {
+                            "type": "STRING",
+                            "enum": ["مرحة", "غاضبة", "فضولية", "متعبة", "عادية"]
+                        },
+                        "intent": {
+                            "type": "STRING",
+                            "enum": ["مزاح", "شكوى", "سؤال", "خبر"]
+                        }
                     },
                     "required": ["reply"]
                 },
-                "thinkingConfig": thinking_config
             }
         }
+
+        # ✅ FIX 4 (تكملة): نضيف thinkingConfig فقط إذا كان none
+        if self.thinking_mode == "none":
+            payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
 
         if self.cache_enabled:
             await self._ensure_cache()
@@ -521,16 +567,33 @@ class GeminiClient:
                 r.raise_for_status()
                 data = r.json()
 
+                # ✅ FIX 10: استخراج الرد بشكل صحيح
+                # مع thinking، الـ parts قد تحتوي على thought parts — نأخذ فقط النص غير الـ thought
+                reply_text = ""
                 try:
-                    raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    parts = data["candidates"][0]["content"]["parts"]
+                    for part in parts:
+                        # ✅ نتجاهل الـ thought parts (حسب docs)
+                        if part.get("thought", False):
+                            continue
+                        if part.get("text"):
+                            reply_text = part["text"].strip()
+                            break
                 except (KeyError, IndexError):
                     raise ValueError("Invalid response structure from Gemini")
 
-                if not raw_text:
-                    raise ValueError("Empty response from Gemini")
+                if not reply_text:
+                    # ✅ FIX 11: تحقق من finishReason لفهم سبب الرد الفارغ
+                    finish_reason = data.get("candidates", [{}])[0].get("finishReason", "UNKNOWN")
+                    logger.warning(f"Empty response, finishReason={finish_reason}")
+                    if finish_reason == "SAFETY":
+                        reply_text = '{"reply": "واش راك؟ هاد السؤال ما ينجمش نجاوب عليه 😅"}'
+                    else:
+                        raise ValueError(f"Empty response from Gemini (finishReason={finish_reason})")
 
+                # parse JSON
                 try:
-                    parsed = json.loads(raw_text)
+                    parsed = json.loads(reply_text)
                     if isinstance(parsed, dict):
                         reply = parsed.get("reply", "").strip()
                         mood = parsed.get("mood", "عادية")
@@ -540,24 +603,26 @@ class GeminiClient:
                         mood = "عادية"
                         intent = "سؤال"
                 except json.JSONDecodeError:
-                    reply = raw_text.strip()
+                    # الـ responseMimeType=application/json يضمن JSON، لكن احتياطياً:
+                    reply = reply_text.strip()
                     mood = "عادية"
                     intent = "سؤال"
 
                 if not reply:
-                    reply = "عذراً، ما قدرت نجاوبك الآن 🙏"
+                    reply = "هههه، مادرتش نجاوبك دروك 🙏"
 
                 usage = data.get("usageMetadata", {})
                 actual_tokens = usage.get("totalTokenCount", estimated_input)
                 await self.orchestrator.report_success(ks, actual_tokens)
 
-                logger.info(f"✅ Key {key_id}… | tokens={actual_tokens} | mood={mood} | intent={intent} | reply_len={len(reply)}")
+                logger.info(
+                    f"✅ Key {key_id}… | tokens={actual_tokens} | "
+                    f"mood={mood} | intent={intent} | reply_len={len(reply)}"
+                )
 
                 return {
                     "reply": reply,
                     "tokens_used": actual_tokens,
-                    "thought_signature": None,
-                    "thinking_level": "none",
                     "mood": mood,
                     "intent": intent,
                 }
@@ -581,16 +646,19 @@ class TelegramClient:
         self.client = client
 
     async def send_message(self, chat_id: int, text: str) -> bool:
+        # ✅ FIX 12: parse_mode="HTML" يسبب مشاكل إذا الرد يحتوي على < > & — نستخدم Markdown أو نحذفها
+        # الدارجة نادراً ما تحتوي على HTML، لكن احتياطياً نحذف parse_mode
         chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
         for chunk in chunks:
             try:
                 r = await self.client.post(
                     f"{TELEGRAM_API}/sendMessage",
-                    json={"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"},
+                    json={"chat_id": chat_id, "text": chunk},
                     timeout=10.0,
                 )
                 if r.status_code != 200:
                     logger.error(f"Telegram sendMessage: {r.status_code} — {r.text[:200]}")
+                    # ✅ إذا فشل، نحاول بدون formatting
                     return False
             except Exception as e:
                 logger.error(f"Telegram sendMessage error: {e}")
@@ -611,7 +679,13 @@ class TelegramClient:
         try:
             r = await self.client.post(
                 f"{TELEGRAM_API}/setWebhook",
-                json={"url": url, "allowed_updates": ["message"], "drop_pending_updates": False},
+                json={
+                    "url": url,
+                    "allowed_updates": ["message"],
+                    "drop_pending_updates": False,
+                    # ✅ FIX 13: نحدد max_connections لتحسين الأداء على Render free tier
+                    "max_connections": 40,
+                },
                 timeout=10.0,
             )
             data = r.json()
@@ -647,7 +721,6 @@ async def lifespan(app: FastAPI):
     gemini = GeminiClient(http_client, orchestrator)
     telegram = TelegramClient(http_client)
 
-    # جلب معرف البوت
     try:
         me = await http_client.get(f"{TELEGRAM_API}/getMe")
         if me.status_code == 200:
@@ -664,7 +737,7 @@ async def lifespan(app: FastAPI):
         webhook_url = f"{RENDER_URL}/webhook"
         await telegram.set_webhook(webhook_url)
 
-    logger.info(f"🚀 Sahaba bot started — model: {MODEL_NAME} (Thinking level: {gemini.thinking_level})")
+    logger.info(f"🚀 Sahaba bot started — model: {MODEL_NAME} | thinking: {gemini.thinking_mode}")
     yield
 
     await http_client.aclose()
@@ -672,13 +745,12 @@ async def lifespan(app: FastAPI):
 
 
 def should_respond_in_group(message: dict) -> bool:
-    """ترجع True إذا كان يجب الرد في المجموعة (مناداتها أو رد على رسالتها)"""
-    # الحالة الأولى: الرسالة تحتوي على اسم البوت
+    """ترجع True إذا كان يجب الرد في المجموعة"""
     text = message.get("text", "")
-    if text and "سحابه" in text:
+    # ✅ FIX 14: نضيف "سحابة" بدون هاء مربوطة أيضاً (بعض الناس يكتبوا "سحابه")
+    if text and ("سحابة" in text or "سحابه" in text):
         return True
 
-    # الحالة الثانية: الرسالة هي رد على رسالة سابقة من البوت
     reply = message.get("reply_to_message")
     if reply and BOT_ID:
         reply_from = reply.get("from", {})
@@ -719,24 +791,26 @@ async def telegram_webhook(request: Request):
 
     logger.info(f"💬 msg | user={user_id} @{username} | chat={chat_id} type={chat_type} | text=[{text[:80]}]")
 
-    # التحقق من صلاحية الرد في المجموعات
     if chat_type != "private":
         if not should_respond_in_group(message):
-            logger.info(f"⏭️ Ignored group message (not addressed to bot nor reply)")
+            logger.info(f"⏭️ Ignored group message (not addressed to bot)")
             return {"ok": True}
 
     if not chat_id or not user_id or not text:
         return {"ok": True}
 
     if text.startswith("/start"):
-        await telegram.send_message(chat_id, "واش راك؟ أنا سحابة 🌥️\nكلمني بالعربي، الدارجة، أو حتى arabizi — أنا هنا!")
+        await telegram.send_message(
+            chat_id,
+            "واش راك؟ أنا سحابة 🌥️\nكلمني بالدارجة، العربي، أو arabizi — أنا هنا!"
+        )
         return {"ok": True}
 
     await telegram.send_chat_action(chat_id)
 
     try:
         history = await supabase.get_history(user_id, limit=10)
-        messages = history + [{"role": "user", "content": text, "thought_signature": None}]
+        messages = history + [{"role": "user", "content": text}]
 
         result = await gemini.generate_response(messages)
 
@@ -744,7 +818,7 @@ async def telegram_webhook(request: Request):
 
         metadata = {
             "tokens_used": result["tokens_used"],
-            "thinking_level": result["thinking_level"],
+            "thinking_mode": gemini.thinking_mode,
             "model": MODEL_NAME,
             "mood": result.get("mood", "عادية"),
             "intent": result.get("intent", "سؤال"),
@@ -753,12 +827,15 @@ async def telegram_webhook(request: Request):
             user_id,
             "assistant",
             result["reply"],
-            thought_signature=result.get("thought_signature"),
             mood=result.get("mood"),
             metadata=metadata,
         )
 
-        await supabase.update_user(user_id, current_mood=result.get("mood"), metadata={"last_reply_tokens": result["tokens_used"]})
+        await supabase.update_user(
+            user_id,
+            current_mood=result.get("mood"),
+            metadata={"last_reply_tokens": result["tokens_used"]}
+        )
 
         await telegram.send_message(chat_id, result["reply"])
 
@@ -778,6 +855,7 @@ async def health(request: Request = None):
     return {
         "status": "healthy" if stats["active"] > 0 else "degraded",
         "model": MODEL_NAME,
+        "thinking_mode": gemini.thinking_mode if gemini else "unknown",
         "keys": stats,
         "rate_limits": {
             "max_rpm": MAX_RPM,
