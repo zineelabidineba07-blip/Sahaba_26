@@ -12,11 +12,11 @@ envVars:
   - key: GEMINI_KEY_1
     sync: false
   - key: GEMINI_MAX_RPM
-    value: "30"
+    value: "15"
   - key: GEMINI_MAX_TPM
     value: "1000000"
   - key: GEMINI_MAX_RPD
-    value: "1500"
+    value: "499"
   - key: THINKING_MODE
     value: "auto"           # أو minimal, low, medium, high
   - key: ENABLE_CONTEXT_CACHE
