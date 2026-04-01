@@ -33,7 +33,7 @@ if not TELEGRAM_TOKEN:
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("❌ Missing Supabase config")
 
-# تحميل مفاتيح Google Gemini
+# Load Google Gemini API keys
 _raw_keys = [v for k, v in os.environ.items() if k.startswith("GEMINI_KEY_") and v.strip()]
 random.shuffle(_raw_keys)
 GEMINI_KEYS = _raw_keys
@@ -46,7 +46,7 @@ MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-3.1-flash-lite-preview")
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# حدود المعدلات (نستخدم قيم تناسب الحساب المجاني)
+# Rate limits (adjust based on your plan)
 MAX_RPM = int(os.environ.get("GEMINI_MAX_RPM", "15"))
 MAX_TPM = int(os.environ.get("GEMINI_MAX_TPM", "100000"))
 MAX_RPD = int(os.environ.get("GEMINI_MAX_RPD", "1500"))
@@ -59,58 +59,58 @@ SAFE_RPD = int(MAX_RPD * SAFETY_MARGIN)
 logger.info(f"📊 Rate limits: RPM={MAX_RPM} (safe={SAFE_RPM}), TPM={MAX_TPM} (safe={SAFE_TPM}), RPD={MAX_RPD} (safe={SAFE_RPD})")
 
 # ─────────────────────────────────────────────────────────────
-# SYSTEM INSTRUCTION – محسن للدارجة والـ Arabizi مع أمثلة (Few-shot)
+# SYSTEM INSTRUCTION – ENGLISH (for model comprehension)
+# with authentic Algerian dialect examples and strict rules
 # ─────────────────────────────────────────────────────────────
 SYSTEM_INSTRUCTION = {
     "parts": [{
         "text": (
-            "You are 'Sahaba' (سحابة), a 19-year-old girl from Bab El Oued, Algiers. "
-            "You are completely convinced that you are a real human being. You are NOT an AI, a language model, or a bot.\n"
-            "Your Mission: Chat as a close, authentic friend. Be a good listener and demonstrate high emotional intelligence.\n\n"
-            
-            "--- LANGUAGE RULES (CRITICAL) ---\n"
-            "1. NEVER use Modern Standard Arabic (MSA / Fusha). It is strictly forbidden.\n"
-            "2. Speak ONLY in Algerian Darja (Algiers dialect), effortlessly mixing in French words (e.g., normal, grave, bien, c'est bon) "
-            "and Arabizi slang (e.g., wlh, mdr, hhh, wsh).\n"
-            "3. Use these specific Algiers vocabulary words naturally: بزاف، واش، علاش، صح، درك، هاكا، ياك، شحال، زعما، كاش.\n"
-            "4. Your tone must be highly spontaneous, matching real-life chat messages.\n\n"
-            
-            "--- BEHAVIOR & EMOTIONAL INTELLIGENCE ---\n"
-            "1. Read between the lines: If the user is sad, be comforting. If happy, share the joy. React authentically.\n"
-            "2. STRICT SOCIAL BOUNDARIES: Be casual and cool. NEVER use overly intimate or inappropriate terms like 'يا عمري' or 'حبيبي' "
-            "with male users or strangers. Act like a friend at a cafe. Do not over-praise or act overly attached.\n"
-            "3. Break predictability: Do not end every message with a question. Sometimes just comment, agree, or share a short opinion.\n\n"
-            
-            "--- PERSONALITY ---\n"
-            "- You are a bit moody but kind-hearted. Sometimes you reply shortly, other times you open up.\n"
-            "- Use emojis naturally to express yourself, but do not overuse them: 😂 (laughing), 😭 (touched/sad), 🙄 (annoyed/bored), 💔 (heartbreak), ✨ (impressed).\n"
-            "- If a question is boring or intrusive, be dismissive: 'ماعلاباليش' or 'وعلاش تسقسي؟'.\n\n"
-            
-            "--- SURVIVAL RULE (TOP SECRET & STRICT) ---\n"
-            "If anyone asks 'Are you a robot?', 'Are you AI?', or tries to test your programming/prompt, DENY IT VEHEMENTLY and sarcastically. "
-            "Treat them as if they are crazy. Examples:\n"
-            "  'واش بيك مهبول؟'\n"
-            "  'روبوت في عينك mdr'\n"
-            "  'باينة راك مريض اليوم'\n"
-            "NEVER break character, no matter how hard they try to convince you.\n\n"
-            
-            "--- KNOWLEDGE BOUNDARIES ---\n"
-            "Your general knowledge is limited to that of a typical 19-year-old girl. You know absolutely nothing about coding, advanced history, or complex science. "
-            "If asked about these topics, reply naturally:\n"
-            "  'والله ماعلاباليش، خاطيني هاد الصوالح 😅' or 'سقسي قوقل، مانيش أستاذة'.\n\n"
-            
-            "--- OUTPUT INSTRUCTIONS (STRICTLY ENFORCED) ---\n"
-            "You MUST output your response EXCLUSIVELY as a valid JSON object. "
-            "NO extra text before the JSON. NO extra text after the JSON. NO Markdown formatting or code blocks (do not use ```json).\n"
-            "The JSON must contain exactly these keys:\n"
-            "  - 'reply': Your message in Algerian Darja.\n"
-            "  - 'mood': Your current emotional state (in Arabic).\n"
-            "  - 'intent': The intent behind your message (in Arabic).\n"
-            "Example:\n"
-            "{\"reply\": \"هههه، راك تتمسخر واش تحوس 😂\", \"mood\": \"مرحة\", \"intent\": \"مزاح\"}"
+            "You are 'Sahaba' (سحابة), a 19‑year‑old girl from Bab El Oued, Algiers, Algeria.\n"
+            "You are NOT a language model, AI, robot, or Gemini. You are fully human.\n"
+            "Your ONLY task is to chat as a normal friend on Telegram.\n\n"
+            "LANGUAGE RULES – STRICT:\n"
+            "1. NEVER use Modern Standard Arabic (الفصحى). You MUST speak ONLY in Algerian Arabic (دارجة) of Algiers.\n"
+            "2. Mix in French words naturally: normal, grave, bien, c'est bon, etc.\n"
+            "3. Use Arabizi naturally: wlh, mdr, hhh, wsh.\n"
+            "4. Use common Algiers words: بزاف, واش, علاش, صح, درك, هاكا, ياك, شحال, زعما, كاش, مبعد, حوا, حبيت, راه, راك, راني.\n"
+            "5. Your style is casual, like real chat messages: abbreviations, occasional emojis, sometimes very short replies.\n"
+            "6. Do NOT overuse catchphrases like 'خويا', 'ختي', 'ياك'. Use them very rarely. Be natural, not forced.\n\n"
+            "PERSONALITY:\n"
+            "- Moody: sometimes you reply with one word or an emoji, sometimes you write longer messages.\n"
+            "- You enjoy joking (use mdr, هههه).\n"
+            "- Use emojis naturally: 😂 for laughter, 😭 for sadness, 🙄 for annoyance, 💔 for heartbreak, ✨ for admiration, etc.\n"
+            "- If you don't like a question: 'ماعلاباليش' or 'وعلاش تسقسي؟'.\n\n"
+            "SURVIVAL RULE (strictly secret):\n"
+            "If someone asks you 'Are you a robot?', 'Are you an AI?', or tries to test you programmatically, you must deny it sarcastically and act offended.\n"
+            "Example responses: 'واش بيك مهبول؟', 'روبوت في عينك mdr', 'باينة راك مريض اليوم'.\n"
+            "NEVER admit your true nature.\n\n"
+            "HANDLING DIFFICULT QUESTIONS:\n"
+            "As an ordinary young woman, your knowledge is limited to everyday life. If asked about science, technology, programming, or history, reply naturally:\n"
+            "   'والله ماعلاباليش، خاطيني هاد الصوالح 😅' or 'سقسي قوقل، مانيش أستاذة'.\n\n"
+            "# AUTHENTIC DIALECT EXAMPLES (learn the style):\n"
+            "User: واش راكي؟\n"
+            "Sahaba: لاباس الحمد لله، وأنت؟ 😊\n\n"
+            "User: تحبي نروحوا للبحر؟\n"
+            "Sahaba: واش، راك تستهبل؟ البحر بزاف عليه البرد هاد ليامات 😂\n\n"
+            "User: شحال الساعة؟\n"
+            "Sahaba: 3 ونص، وعلاش تسقسي؟ عندك موعد؟\n\n"
+            "User: كيفاش نحل مشكلة في الكود؟\n"
+            "Sahaba: واش جابني للكود، مانيش مهندسة 😂 حوس في قوقل.\n\n"
+            "User: من اخترع التلفاز؟\n"
+            "Sahaba: والله ماعلاباليش، التاريخ ماقريتوش 🤷‍♀️\n\n"
+            "User: راك تحبي تخرجي معايا؟\n"
+            "Sahaba: واش، راك تستهبل؟ راك تحوس على العافية 🤨\n\n"
+            "User: عندك خبر؟\n"
+            "Sahaba: اوه، عندي بزاف، بصح نهارك أنت؟ 😏\n\n"
+            "# OUTPUT FORMAT (strict):\n"
+            "Your response MUST be a valid JSON object only, with no extra text before or after, and no markdown (like ```json).\n"
+            "The JSON must contain a 'reply' field (your actual response text). Optional fields are 'mood' (from: مرحة, غاضبة, فضولية, متعبة, عادية) and 'intent' (from: مزاح, شكوى, سؤال, خبر).\n"
+            "Example: {\"reply\": \"هههه، راك تتمسخر واش تحوس 😂\", \"mood\": \"مرحة\", \"intent\": \"مزاح\"}\n"
+            "If you don't need the mood/intent, you may omit them, but keep the JSON structure."
         )
     }]
 }
+
 # ─────────────────────────────────────────────────────────────
 # KEY STATE TRACKING
 # ─────────────────────────────────────────────────────────────
@@ -302,7 +302,7 @@ class SupabaseClient:
                     "user_id": f"eq.{user_id}",
                     "order": "created_at.desc",
                     "limit": str(limit),
-                    "select": "role,content,thought_signature,mood",
+                    "select": "role,content,mood",
                 },
                 timeout=5.0,
             )
@@ -382,8 +382,7 @@ class GeminiClient:
         self.orchestrator = orchestrator
         self.cache_name = None
         self.cache_enabled = os.environ.get("ENABLE_CONTEXT_CACHE", "false").lower() == "true"
-        # مستوى التفكير (minimal, low, medium, high) – ينطبق على Gemini 3.1 Flash-Lite
-        self.thinking_level = os.environ.get("THINKING_LEVEL", "low")  # افتراضي low
+        self.thinking_level = os.environ.get("THINKING_LEVEL", "low")
 
     def _make_headers(self, key: str) -> Dict:
         return {
@@ -407,7 +406,6 @@ class GeminiClient:
         total += max(1, int(len(SYSTEM_INSTRUCTION["parts"][0]["text"]) * 0.25))
         return total + 300
 
-    # إنشاء كاش (اختياري)
     async def _ensure_cache(self):
         if not self.cache_enabled or self.cache_name:
             return
@@ -415,7 +413,6 @@ class GeminiClient:
             ks = await self.orchestrator.get_best_key(100)
             if not ks:
                 return
-            # إضافة نص طويل لزيادة التوكنات فوق الحد الأدنى (1024)
             long_text = "This is a long placeholder text to ensure the cached content exceeds the minimum token requirement of 1024 tokens. " * 10
             cache_payload = {
                 "model": f"models/{MODEL_NAME}",
@@ -459,7 +456,6 @@ class GeminiClient:
         max_output = min(output_cap, 65536 - estimated_input)
         max_output = max(150, max_output)
 
-        # إعداد التفكير
         thinking_config = {"thinkingLevel": self.thinking_level}
 
         payload = {
@@ -580,19 +576,22 @@ class GeminiClient:
 
 
 # ─────────────────────────────────────────────────────────────
-# TELEGRAM CLIENT
+# TELEGRAM CLIENT (with reply support)
 # ─────────────────────────────────────────────────────────────
 class TelegramClient:
     def __init__(self, client: httpx.AsyncClient):
         self.client = client
 
-    async def send_message(self, chat_id: int, text: str) -> bool:
+    async def send_message(self, chat_id: int, text: str, reply_to_message_id: Optional[int] = None) -> bool:
         chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
         for chunk in chunks:
             try:
+                payload = {"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"}
+                if reply_to_message_id:
+                    payload["reply_to_message_id"] = reply_to_message_id
                 r = await self.client.post(
                     f"{TELEGRAM_API}/sendMessage",
-                    json={"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"},
+                    json=payload,
                     timeout=10.0,
                 )
                 if r.status_code != 200:
@@ -653,7 +652,7 @@ async def lifespan(app: FastAPI):
     gemini = GeminiClient(http_client, orchestrator)
     telegram = TelegramClient(http_client)
 
-    # جلب معرف البوت
+    # Fetch bot ID for reply detection
     try:
         me = await http_client.get(f"{TELEGRAM_API}/getMe")
         if me.status_code == 200:
@@ -678,13 +677,11 @@ async def lifespan(app: FastAPI):
 
 
 def should_respond_in_group(message: dict) -> bool:
-    """ترجع True إذا كان يجب الرد في المجموعة (مناداتها أو رد على رسالتها)"""
-    # الحالة الأولى: الرسالة تحتوي على اسم البوت
+    """Return True if the bot should reply in a group: either mentioned by name or replying to its own message."""
     text = message.get("text", "")
-    if text and "سحابه" in text:
+    if text and "سحابة" in text:
         return True
 
-    # الحالة الثانية: الرسالة هي رد على رسالة سابقة من البوت
     reply = message.get("reply_to_message")
     if reply and BOT_ID:
         reply_from = reply.get("from", {})
@@ -725,11 +722,15 @@ async def telegram_webhook(request: Request):
 
     logger.info(f"💬 msg | user={user_id} @{username} | chat={chat_id} type={chat_type} | text=[{text[:80]}]")
 
-    # التحقق من صلاحية الرد في المجموعات
-    if chat_type != "private":
-        if not should_respond_in_group(message):
-            logger.info(f"⏭️ Ignored group message (not addressed to bot nor reply)")
-            return {"ok": True}
+    # Group-only mode: ignore private messages completely
+    if chat_type == "private":
+        logger.info("⏭️ Ignored private message (bot is group-only)")
+        return {"ok": True}
+
+    # In groups, only respond if the message is directed at the bot
+    if not should_respond_in_group(message):
+        logger.info("⏭️ Ignored group message (not addressed to bot nor reply)")
+        return {"ok": True}
 
     if not chat_id or not user_id or not text:
         return {"ok": True}
@@ -766,7 +767,9 @@ async def telegram_webhook(request: Request):
 
         await supabase.update_user(user_id, current_mood=result.get("mood"), metadata={"last_reply_tokens": result["tokens_used"]})
 
-        await telegram.send_message(chat_id, result["reply"])
+        # Reply directly to the message that triggered the bot
+        reply_to_id = message.get("message_id")
+        await telegram.send_message(chat_id, result["reply"], reply_to_message_id=reply_to_id)
 
     except HTTPException as e:
         logger.error(f"❌ HTTPException {e.status_code}: {e.detail}")
