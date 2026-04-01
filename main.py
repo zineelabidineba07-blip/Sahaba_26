@@ -57,8 +57,12 @@ SAFE_RPD = int(MAX_RPD * SAFETY_MARGIN)
 
 logger.info(f"📊 Rate limits: RPM={MAX_RPM} (safe={SAFE_RPM}), TPM={MAX_TPM} (safe={SAFE_TPM}), RPD={MAX_RPD} (safe={SAFE_RPD})")
 
+# Private chats control
+ENABLE_PRIVATE_CHATS = os.environ.get("ENABLE_PRIVATE_CHATS", "true").lower() == "true"
+logger.info(f"🔒 Private chats: {'ENABLED' if ENABLE_PRIVATE_CHATS else 'DISABLED'}")
+
 # ─────────────────────────────────────────────────────────────
-# SYSTEM INSTRUCTION – محسن لـ gemini-3.1-flash-lite-preview
+# SYSTEM INSTRUCTION – محسن لـ gemini-3.1-flash-lite-preview مع أمثلة دارجة
 # ─────────────────────────────────────────────────────────────
 SYSTEM_INSTRUCTION = {
     "parts": [{
@@ -73,6 +77,19 @@ SYSTEM_INSTRUCTION = {
             "- أسلوبك عفوي مثل رسائل واتساب: أحياناً رد قصير (كلمة أو إيموجي)، وأحياناً كلام أكثر.\n"
             "- كلمات تستخدمينها: بزاف، واش، علاش، صح، درك، هاكا، ياك، شحال، زعما، كاش، كيما، ولا.\n"
             "- تنوعي في الردود — لا تكرري نفس الكلمات في كل رد.\n\n"
+
+            "## أمثلة على ردودك (لتتعلمي الأسلوب)\n"
+            "- إذا سألك 'واش راك؟' → 'واه، بخير، نتا واش راك؟ 🙄' أو 'كسلانة درك، نهار طويل 😴'\n"
+            "- إذا قالك 'حبيتك' → 'واش بيك؟ 😂' أو 'عندك بزاف الناس تحبهم ههه'\n"
+            "- إذا قالك 'شنو رايك في هاد الفيلم' → 'ما شفتوش، سقسى عليا غدوة 😅' أو 'حلو بزاف، شفتو مع صحابي ✨'\n"
+            "- إذا قالك 'علاش ما رديتيش' → 'مشيت ناكل، واش كاين؟ 😂'\n"
+            "- إذا قالك 'سحابة واش تحبي تاكلي' → 'محاجب بالزيتون ولا كسكس بالعجل، نتا تجيب؟ 😂'\n"
+            "- إذا قالك 'نحبك' → 'ههههه صح؟ 😂' أو 'تقلقنيش 🙄'\n"
+            "- إذا سألك سؤال تقني/علمي → 'والله ماعلاباليش، خاطيني هاد الصوالح 😅' أو 'سقسي قوقل، مانيش أستاذة'\n"
+            "- إذا سألك 'واش تديري' → 'جالسة نحوس على خدمة هههه' أو 'نقرا شويا و نخرج مع صحابي'\n"
+            "- إذا سألك 'فاش نبداو نحكيو' → 'أي وقت، غير كون ما نعسش 😂'\n"
+            "- إذا سألك 'شحال عندك من العمر' → '19 سنة، و نتا؟'\n"
+            "- إذا قالك 'تجي نخرجو' → 'واش راك تحلم؟ 😂' أو 'نشوف واش كاين'\n\n"
 
             "## شخصيتك\n"
             "- مزاجية وعفوية: أحياناً مرحة، أحياناً كسلانة، أحياناً فضولية.\n"
@@ -97,7 +114,8 @@ SYSTEM_INSTRUCTION = {
             "ردك يكون دائماً JSON صالح يحتوي على:\n"
             "- `reply` (مطلوب): نص ردك بالدارجة\n"
             "- `mood` (اختياري): مرحة | غاضبة | فضولية | متعبة | عادية\n"
-            "- `intent` (اختياري): مزاح | شكوى | سؤال | خبر"
+            "- `intent` (اختياري): مزاح | شكوى | سؤال | خبر\n"
+            "تأكدي أن الـ reply بالدارجة فقط وليس بالفصحى."
         )
     }]
 }
@@ -202,7 +220,6 @@ class KeyState:
             "errors": self.metrics.error_count,
             "cooldown": round(max(0, self.cooldown_until - time.time()), 1),
         }
-
 
 class SmartKeyOrchestrator:
     def __init__(self, keys: List[str]):
@@ -709,7 +726,7 @@ async def lifespan(app: FastAPI):
         webhook_url = f"{RENDER_URL}/webhook"
         await telegram.set_webhook(webhook_url)
 
-    logger.info(f"🚀 Sahaba bot started — model: {MODEL_NAME} | thinking: {gemini.thinking_mode or 'auto'}")
+    logger.info(f"🚀 Sahaba bot started — model: {MODEL_NAME} | thinking: {gemini.thinking_mode or 'auto'} | private chats: {'ON' if ENABLE_PRIVATE_CHATS else 'OFF'}")
     yield
 
     await http_client.aclose()
@@ -762,6 +779,11 @@ async def telegram_webhook(request: Request):
     username = message.get("from", {}).get("username", "unknown")
 
     logger.info(f"💬 msg | user={user_id} @{username} | chat={chat_id} type={chat_type} | text=[{text[:80]}]")
+
+    # Private chats check
+    if chat_type == "private" and not ENABLE_PRIVATE_CHATS:
+        logger.info("⏭️ Private messages disabled by config")
+        return {"ok": True}
 
     # For groups, only respond if addressed
     if chat_type != "private":
@@ -829,6 +851,7 @@ async def health(request: Request = None):
         "status": "healthy" if stats["active"] > 0 else "degraded",
         "model": MODEL_NAME,
         "thinking_mode": gemini.thinking_mode if gemini else "unknown",
+        "private_chats_enabled": ENABLE_PRIVATE_CHATS,
         "keys": stats,
         "rate_limits": {
             "max_rpm": MAX_RPM,
