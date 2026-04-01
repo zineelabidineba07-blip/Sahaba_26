@@ -46,12 +46,12 @@ MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-3.1-flash-lite-preview")
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# Rate limits – increased for better throughput
-MAX_RPM = int(os.environ.get("GEMINI_MAX_RPM", "30"))
-MAX_TPM = int(os.environ.get("GEMINI_MAX_TPM", "200000"))
+# Rate limits – adjusted for free tier
+MAX_RPM = int(os.environ.get("GEMINI_MAX_RPM", "15"))
+MAX_TPM = int(os.environ.get("GEMINI_MAX_TPM", "100000"))
 MAX_RPD = int(os.environ.get("GEMINI_MAX_RPD", "1500"))
 
-SAFETY_MARGIN = 0.85  # slightly more aggressive safety
+SAFETY_MARGIN = 0.85
 SAFE_RPM = int(MAX_RPM * SAFETY_MARGIN)
 SAFE_TPM = int(MAX_TPM * SAFETY_MARGIN)
 SAFE_RPD = int(MAX_RPD * SAFETY_MARGIN)
@@ -60,8 +60,8 @@ logger.info(f"📊 Rate limits: RPM={MAX_RPM} (safe={SAFE_RPM}), TPM={MAX_TPM} (
 
 # ─────────────────────────────────────────────────────────────
 # SYSTEM INSTRUCTION – ENGLISH (for model comprehension)
+# Expanded with more examples
 # ─────────────────────────────────────────────────────────────
-# Expanded with more examples to exceed 1024 tokens naturally.
 SYSTEM_INSTRUCTION = {
     "parts": [{
         "text": (
@@ -121,7 +121,7 @@ SYSTEM_INSTRUCTION = {
 }
 
 # ─────────────────────────────────────────────────────────────
-# KEY STATE TRACKING (unchanged)
+# KEY STATE TRACKING
 # ─────────────────────────────────────────────────────────────
 @dataclass
 class KeyMetrics:
@@ -435,14 +435,12 @@ class SupabaseClient:
 
 
 # ─────────────────────────────────────────────────────────────
-# GEMINI CLIENT (with tools, caching, and error logging)
+# GEMINI CLIENT (with tools and error logging, caching removed)
 # ─────────────────────────────────────────────────────────────
 class GeminiClient:
     def __init__(self, client: httpx.AsyncClient, orchestrator: SmartKeyOrchestrator):
         self.client = client
         self.orchestrator = orchestrator
-        self.cache_name = None
-        self.cache_enabled = os.environ.get("ENABLE_CONTEXT_CACHE", "false").lower() == "true"
         self.tools_enabled = os.environ.get("ENABLE_GEMINI_TOOLS", "false").lower() == "true"
         self.thinking_level = os.environ.get("THINKING_LEVEL", "medium")
 
@@ -467,41 +465,6 @@ class GeminiClient:
                 total += max(1, int(len(p.get("text", "")) * 0.25))
         total += max(1, int(len(SYSTEM_INSTRUCTION["parts"][0]["text"]) * 0.25))
         return total + 300
-
-    async def _ensure_cache(self):
-        if not self.cache_enabled or self.cache_name:
-            return
-        try:
-            ks = await self.orchestrator.get_best_key(100)
-            if not ks:
-                return
-            # Minimal placeholder – the system instruction already exceeds 1024 tokens
-            cache_payload = {
-                "model": f"models/{MODEL_NAME}",
-                "systemInstruction": SYSTEM_INSTRUCTION,
-                "contents": [{
-                    "role": "user",
-                    "parts": [{"text": "."}]
-                }],
-                "ttl": "86400s"
-            }
-            resp = await self.client.post(
-                f"{GEMINI_BASE}/cachedContents",
-                headers=self._make_headers(ks.key),
-                json=cache_payload,
-                timeout=15.0
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                self.cache_name = data.get("name")
-                logger.info(f"✅ Context cache created: {self.cache_name}")
-            else:
-                logger.warning(f"Cache creation failed: {resp.text[:500]}")
-        except Exception as e:
-            logger.warning(f"Could not create cache: {e}")
-        finally:
-            if ks:
-                self.orchestrator.release_reservation(ks, 100)
 
     async def generate_response(self, messages: List[Dict]) -> Dict:
         contents = self._build_contents(messages)
@@ -550,12 +513,7 @@ class GeminiClient:
         if tools:
             payload["tools"] = tools
 
-        if self.cache_enabled:
-            await self._ensure_cache()
-            if self.cache_name:
-                payload["cachedContent"] = self.cache_name
-
-        max_retries = 5  # increased from 3
+        max_retries = 3
         key = ks.key
         key_id = ks.key_id[:8]
 
@@ -575,8 +533,7 @@ class GeminiClient:
                     if not ks:
                         raise HTTPException(503, "All keys exhausted")
                     key, key_id = ks.key, ks.key_id[:8]
-                    # exponential backoff with longer initial delay
-                    await asyncio.sleep((3 ** attempt) + random.uniform(0, 1))
+                    await asyncio.sleep((2 ** attempt) + random.uniform(0, 1))
                     continue
 
                 if r.status_code == 403:
@@ -649,7 +606,7 @@ class GeminiClient:
 
 
 # ─────────────────────────────────────────────────────────────
-# TELEGRAM CLIENT (unchanged)
+# TELEGRAM CLIENT
 # ─────────────────────────────────────────────────────────────
 class TelegramClient:
     def __init__(self, client: httpx.AsyncClient):
