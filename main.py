@@ -304,32 +304,46 @@ class SupabaseClient:
             return []
 
     async def save_message(
-        self,
-        user_id: str,
-        role: str,
-        content: str,
-        mood: Optional[str] = None,
-        metadata: Optional[Dict] = None,
-    ):
-        try:
-            data = {
-                "user_id": user_id,
-                "role": role,
-                "content": content,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            if mood:
-                data["mood"] = mood
-            data["metadata"] = metadata or {}
+    self,
+    user_id: str,
+    role: str,
+    content: str,
+    mood: Optional[str] = None,
+    metadata: Optional[Dict] = None,
+):
+    data = {
+        "user_id": user_id,
+        "role": role,
+        "content": content,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "metadata": metadata or {},
+    }
+    if mood:
+        data["mood"] = mood
 
-            asyncio.create_task(self.client.post(
-                f"{SUPABASE_URL}/rest/v1/messages",
-                headers=self.headers,
-                json=data,
-                timeout=5.0,
-            ))
-        except Exception as e:
-            logger.error(f"Supabase save_message: {e}")
+    async def _send():
+        for attempt in range(3):
+            try:
+                r = await self.client.post(
+                    f"{SUPABASE_URL}/rest/v1/messages",
+                    headers=self.headers,
+                    json=data,
+                    timeout=5.0,
+                )
+
+                if r.status_code in (200, 201, 204):
+                    return
+
+                logger.warning(f"Supabase write failed ({r.status_code}) attempt={attempt+1}")
+
+            except Exception as e:
+                logger.error(f"Supabase write error attempt={attempt+1}: {e}")
+
+            await asyncio.sleep(0.5 * (attempt + 1))
+
+        logger.error("❌ Supabase write permanently failed")
+
+    asyncio.create_task(_send())
 
     async def update_user(
         self,
@@ -406,12 +420,23 @@ class GeminiClient:
         return contents
 
     def _estimate_tokens(self, contents: List[Dict]) -> int:
-        total = 0
-        for c in contents:
-            for p in c.get("parts", []):
-                total += max(1, int(len(p.get("text", "")) * 0.25))
-        total += max(1, int(len(SYSTEM_INSTRUCTION["parts"][0]["text"]) * 0.25))
-        return total + 300
+    total_chars = 0
+
+    for c in contents:
+        for p in c.get("parts", []):
+            text = p.get("text", "")
+            if text:
+                total_chars += len(text)
+
+    system_text = SYSTEM_INSTRUCTION["parts"][0]["text"]
+    total_chars += len(system_text)
+
+    # ✅ تقدير محافظ (worst-case multilingual + emojis)
+    # 1 token ≈ 2.5 chars (safe side)
+    estimated_tokens = int(total_chars / 2.5)
+
+    # ✅ safety buffer قوي لتفادي overflow
+    return estimated_tokens + 800
 
     async def _ensure_cache(self):
         """
@@ -489,7 +514,7 @@ class GeminiClient:
             "contents": contents,
             "systemInstruction": SYSTEM_INSTRUCTION,
             "generationConfig": {
-                "temperature": 0.85,
+                "temperature": round(random.uniform(0.7, 1.0), 2),
                 "topP": 0.95,
                 "maxOutputTokens": max_output,
                 # ✅ FIX 9: responseMimeType + responseSchema هو الأسلوب الصحيح
