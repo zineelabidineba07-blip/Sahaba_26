@@ -46,12 +46,12 @@ MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-3.1-flash-lite-preview")
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# Rate limits (adjust based on your plan)
-MAX_RPM = int(os.environ.get("GEMINI_MAX_RPM", "15"))
-MAX_TPM = int(os.environ.get("GEMINI_MAX_TPM", "100000"))
+# Rate limits – increased for better throughput
+MAX_RPM = int(os.environ.get("GEMINI_MAX_RPM", "30"))
+MAX_TPM = int(os.environ.get("GEMINI_MAX_TPM", "200000"))
 MAX_RPD = int(os.environ.get("GEMINI_MAX_RPD", "1500"))
 
-SAFETY_MARGIN = 0.90
+SAFETY_MARGIN = 0.85  # slightly more aggressive safety
 SAFE_RPM = int(MAX_RPM * SAFETY_MARGIN)
 SAFE_TPM = int(MAX_TPM * SAFETY_MARGIN)
 SAFE_RPD = int(MAX_RPD * SAFETY_MARGIN)
@@ -465,8 +465,12 @@ class GeminiClient:
             ks = await self.orchestrator.get_best_key(100)
             if not ks:
                 return
-            # Use a minimal placeholder; system instruction alone may already exceed 1024 tokens
-            placeholder = "Placeholder to meet cache requirements."
+            # Enough placeholder to push total tokens above 1024
+            # SYSTEM_INSTRUCTION is about 890 tokens, so add ~200 more
+            placeholder = (
+                "This is additional text to ensure the total token count exceeds the minimum requirement of 1024 tokens. "
+                "We add some more words here to be safe. The system instruction alone is around 890 tokens, so this will push it over."
+            )
             cache_payload = {
                 "model": f"models/{MODEL_NAME}",
                 "systemInstruction": SYSTEM_INSTRUCTION,
@@ -511,7 +515,7 @@ class GeminiClient:
 
         thinking_config = {"thinkingLevel": self.thinking_level}
 
-        # Prepare tools if enabled (code_execution removed)
+        # Prepare tools if enabled
         tools = []
         if self.tools_enabled:
             tools = [
@@ -546,7 +550,7 @@ class GeminiClient:
             if self.cache_name:
                 payload["cachedContent"] = self.cache_name
 
-        max_retries = min(3, len(self.orchestrator.keys))
+        max_retries = 5  # increased from 3
         key = ks.key
         key_id = ks.key_id[:8]
 
@@ -566,7 +570,8 @@ class GeminiClient:
                     if not ks:
                         raise HTTPException(503, "All keys exhausted")
                     key, key_id = ks.key, ks.key_id[:8]
-                    await asyncio.sleep((2 ** attempt) + random.uniform(0, 1))
+                    # exponential backoff with longer initial delay
+                    await asyncio.sleep((3 ** attempt) + random.uniform(0, 1))
                     continue
 
                 if r.status_code == 403:
@@ -741,7 +746,8 @@ async def lifespan(app: FastAPI):
 
 def should_respond_in_group(message: dict) -> bool:
     text = message.get("text", "")
-    if text and "سحابة" in text:
+    # Check both common spellings
+    if text and ("سحابة" in text or "سحابه" in text):
         return True
 
     reply = message.get("reply_to_message")
@@ -803,7 +809,7 @@ async def telegram_webhook(request: Request):
     await telegram.send_chat_action(chat_id)
 
     try:
-        # Fetch user preferences (optional, can be used later to adjust personality)
+        # Fetch user preferences (optional)
         # prefs = await supabase.get_preferences(user_id)  # uncomment if needed
 
         history = await supabase.get_history(user_id, limit=10)
