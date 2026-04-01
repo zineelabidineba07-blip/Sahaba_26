@@ -60,7 +60,6 @@ logger.info(f"📊 Rate limits: RPM={MAX_RPM} (safe={SAFE_RPM}), TPM={MAX_TPM} (
 
 # ─────────────────────────────────────────────────────────────
 # SYSTEM INSTRUCTION – ENGLISH (for model comprehension)
-# with authentic Algerian dialect examples and strict rules
 # ─────────────────────────────────────────────────────────────
 SYSTEM_INSTRUCTION = {
     "parts": [{
@@ -112,7 +111,7 @@ SYSTEM_INSTRUCTION = {
 }
 
 # ─────────────────────────────────────────────────────────────
-# KEY STATE TRACKING
+# KEY STATE TRACKING (unchanged)
 # ─────────────────────────────────────────────────────────────
 @dataclass
 class KeyMetrics:
@@ -281,7 +280,7 @@ class SmartKeyOrchestrator:
 
 
 # ─────────────────────────────────────────────────────────────
-# SUPABASE CLIENT
+# SUPABASE CLIENT (with preferences & error logging)
 # ─────────────────────────────────────────────────────────────
 class SupabaseClient:
     def __init__(self, client: httpx.AsyncClient):
@@ -372,9 +371,61 @@ class SupabaseClient:
         except Exception as e:
             logger.error(f"Supabase update_user: {e}")
 
+    # User preferences
+    async def get_preferences(self, user_id: str) -> Dict:
+        try:
+            r = await self.client.get(
+                f"{SUPABASE_URL}/rest/v1/user_preferences",
+                headers=self.headers,
+                params={"user_id": f"eq.{user_id}", "select": "preferences"},
+                timeout=5.0,
+            )
+            if r.status_code == 200 and r.json():
+                return r.json()[0].get("preferences", {})
+            return {}
+        except Exception as e:
+            logger.error(f"Supabase get_preferences: {e}")
+            return {}
+
+    async def update_preferences(self, user_id: str, preferences: Dict):
+        try:
+            data = {
+                "user_id": user_id,
+                "preferences": preferences,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await self.client.post(
+                f"{SUPABASE_URL}/rest/v1/user_preferences",
+                headers=self.headers,
+                json=data,
+                params={"on_conflict": "user_id"},
+                timeout=5.0,
+            )
+        except Exception as e:
+            logger.error(f"Supabase update_preferences: {e}")
+
+    # Error logging
+    async def log_error(self, user_id: Optional[str], error_type: str, error_message: str, metadata: Dict = None):
+        try:
+            data = {
+                "user_id": user_id,
+                "error_type": error_type,
+                "error_message": error_message[:500],
+                "metadata": metadata or {},
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            asyncio.create_task(self.client.post(
+                f"{SUPABASE_URL}/rest/v1/error_logs",
+                headers=self.headers,
+                json=data,
+                timeout=5.0,
+            ))
+        except Exception as e:
+            logger.error(f"Supabase log_error failed: {e}")
+
 
 # ─────────────────────────────────────────────────────────────
-# GEMINI CLIENT
+# GEMINI CLIENT (with tools, caching, and error logging)
 # ─────────────────────────────────────────────────────────────
 class GeminiClient:
     def __init__(self, client: httpx.AsyncClient, orchestrator: SmartKeyOrchestrator):
@@ -382,6 +433,7 @@ class GeminiClient:
         self.orchestrator = orchestrator
         self.cache_name = None
         self.cache_enabled = os.environ.get("ENABLE_CONTEXT_CACHE", "false").lower() == "true"
+        self.tools_enabled = os.environ.get("ENABLE_GEMINI_TOOLS", "false").lower() == "true"
         self.thinking_level = os.environ.get("THINKING_LEVEL", "medium")
 
     def _make_headers(self, key: str) -> Dict:
@@ -413,13 +465,14 @@ class GeminiClient:
             ks = await self.orchestrator.get_best_key(100)
             if not ks:
                 return
-            long_text = "This is a long placeholder text to ensure the cached content exceeds the minimum token requirement of 1024 tokens. " * 10
+            # Use a minimal placeholder; system instruction alone may already exceed 1024 tokens
+            placeholder = "Placeholder to meet cache requirements."
             cache_payload = {
                 "model": f"models/{MODEL_NAME}",
                 "systemInstruction": SYSTEM_INSTRUCTION,
                 "contents": [{
                     "role": "user",
-                    "parts": [{"text": long_text}]
+                    "parts": [{"text": placeholder}]
                 }],
                 "ttl": "86400s"
             }
@@ -458,6 +511,14 @@ class GeminiClient:
 
         thinking_config = {"thinkingLevel": self.thinking_level}
 
+        # Prepare tools if enabled (code_execution removed)
+        tools = []
+        if self.tools_enabled:
+            tools = [
+                {"google_search": {}},
+                {"url_context": {}}
+            ]
+
         payload = {
             "contents": contents,
             "systemInstruction": SYSTEM_INSTRUCTION,
@@ -477,6 +538,8 @@ class GeminiClient:
                 "thinkingConfig": thinking_config
             }
         }
+        if tools:
+            payload["tools"] = tools
 
         if self.cache_enabled:
             await self._ensure_cache()
@@ -576,7 +639,7 @@ class GeminiClient:
 
 
 # ─────────────────────────────────────────────────────────────
-# TELEGRAM CLIENT (with reply support)
+# TELEGRAM CLIENT (unchanged)
 # ─────────────────────────────────────────────────────────────
 class TelegramClient:
     def __init__(self, client: httpx.AsyncClient):
@@ -652,7 +715,7 @@ async def lifespan(app: FastAPI):
     gemini = GeminiClient(http_client, orchestrator)
     telegram = TelegramClient(http_client)
 
-    # Fetch bot ID for reply detection
+    # Fetch bot ID
     try:
         me = await http_client.get(f"{TELEGRAM_API}/getMe")
         if me.status_code == 200:
@@ -677,7 +740,6 @@ async def lifespan(app: FastAPI):
 
 
 def should_respond_in_group(message: dict) -> bool:
-    """Return True if the bot should reply in a group: either mentioned by name or replying to its own message."""
     text = message.get("text", "")
     if text and "سحابة" in text:
         return True
@@ -722,12 +784,11 @@ async def telegram_webhook(request: Request):
 
     logger.info(f"💬 msg | user={user_id} @{username} | chat={chat_id} type={chat_type} | text=[{text[:80]}]")
 
-    # Group-only mode: ignore private messages completely
+    # Group-only mode
     if chat_type == "private":
         logger.info("⏭️ Ignored private message (bot is group-only)")
         return {"ok": True}
 
-    # In groups, only respond if the message is directed at the bot
     if not should_respond_in_group(message):
         logger.info("⏭️ Ignored group message (not addressed to bot nor reply)")
         return {"ok": True}
@@ -736,12 +797,15 @@ async def telegram_webhook(request: Request):
         return {"ok": True}
 
     if text.startswith("/start"):
-        await telegram.send_message(chat_id, "واش راك؟ أنا سحابه 🌥️\nكلمني بالعربي، الدارجة، أو حتى arabizi — أنا هنا!")
+        await telegram.send_message(chat_id, "واش راك؟ أنا سحابة 🌥️\nكلمني بالعربي، الدارجة، أو حتى arabizi — أنا هنا!")
         return {"ok": True}
 
     await telegram.send_chat_action(chat_id)
 
     try:
+        # Fetch user preferences (optional, can be used later to adjust personality)
+        # prefs = await supabase.get_preferences(user_id)  # uncomment if needed
+
         history = await supabase.get_history(user_id, limit=10)
         messages = history + [{"role": "user", "content": text, "thought_signature": None}]
 
@@ -767,15 +831,18 @@ async def telegram_webhook(request: Request):
 
         await supabase.update_user(user_id, current_mood=result.get("mood"), metadata={"last_reply_tokens": result["tokens_used"]})
 
-        # Reply directly to the message that triggered the bot
         reply_to_id = message.get("message_id")
         await telegram.send_message(chat_id, result["reply"], reply_to_message_id=reply_to_id)
 
     except HTTPException as e:
-        logger.error(f"❌ HTTPException {e.status_code}: {e.detail}")
+        error_msg = f"HTTPException {e.status_code}: {e.detail}"
+        logger.error(f"❌ {error_msg}")
+        await supabase.log_error(user_id, "http_exception", error_msg, {"status_code": e.status_code})
         await telegram.send_message(chat_id, "عندي مشكلة تقنية دروك، جرب بعد شوية 🙏")
     except Exception as e:
-        logger.error(f"❌ Webhook handler error: {type(e).__name__}: {e}", exc_info=True)
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        logger.error(f"❌ Webhook handler error: {error_msg}", exc_info=True)
+        await supabase.log_error(user_id, "unhandled_exception", error_msg, {"traceback": str(e)})
         await telegram.send_message(chat_id, "راني نحل مشكلة، عاود بعد لحظة ⚙️")
 
     return {"ok": True}
