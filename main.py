@@ -382,7 +382,7 @@ class GeminiClient:
         self.orchestrator = orchestrator
         self.cache_name = None
         self.cache_enabled = os.environ.get("ENABLE_CONTEXT_CACHE", "false").lower() == "true"
-        self.thinking_level = os.environ.get("THINKING_LEVEL", "low")
+        self.thinking_level = os.environ.get("THINKING_LEVEL", "medium")
 
     def _make_headers(self, key: str) -> Dict:
         return {
@@ -736,7 +736,7 @@ async def telegram_webhook(request: Request):
         return {"ok": True}
 
     if text.startswith("/start"):
-        await telegram.send_message(chat_id, "واش راك؟ أنا سحابة 🌥️\nكلمني بالعربي، الدارجة، أو حتى arabizi — أنا هنا!")
+        await telegram.send_message(chat_id, "واش راك؟ أنا سحابه 🌥️\nكلمني بالعربي، الدارجة، أو حتى arabizi — أنا هنا!")
         return {"ok": True}
 
     await telegram.send_chat_action(chat_id)
