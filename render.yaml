@@ -1,34 +1,23 @@
-services:
-  - type: web
-    name: sahaba-bot
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    plan: free
-    healthCheckPath: /health
-    envVars:
-      - key: TELEGRAM_TOKEN
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
-        sync: false
-      - key: RENDER_URL
-        sync: false
-      # ✅ اسم الموديل الصحيح
-      - key: MODEL_NAME
-        value: "gemini-3.1-flash-lite-preview"
-      - key: GEMINI_KEY_1
-        sync: false
-      # ✅ حدود المعدلات الحقيقية لـ gemini-3.1-flash-lite-preview (Free tier)
-      - key: GEMINI_MAX_RPM
-        value: "30"
-      - key: GEMINI_MAX_TPM
-        value: "1000000"
-      - key: GEMINI_MAX_RPD
-        value: "1500"
-      # ✅ وضع التفكير: "none" لتوفير tokens، "auto" للأداء الأفضل
-      - key: THINKING_MODE
-        value: "auto"
-      # ✅ الكاش معطل افتراضياً (يحتاج حساب مدفوع)
-      - key: ENABLE_CONTEXT_CACHE
-        value: "false"
+envVars:
+  - key: TELEGRAM_TOKEN
+    sync: false
+  - key: SUPABASE_URL
+    sync: false
+  - key: SUPABASE_KEY
+    sync: false
+  - key: RENDER_URL
+    sync: false
+  - key: MODEL_NAME
+    value: "gemini-3.1-flash-lite-preview"
+  - key: GEMINI_KEY_1
+    sync: false
+  - key: GEMINI_MAX_RPM
+    value: "30"
+  - key: GEMINI_MAX_TPM
+    value: "1000000"
+  - key: GEMINI_MAX_RPD
+    value: "1500"
+  - key: THINKING_MODE
+    value: "auto"           # أو minimal, low, medium, high
+  - key: ENABLE_CONTEXT_CACHE
+    value: "false"          # مجاني لا يدعم الكاش
