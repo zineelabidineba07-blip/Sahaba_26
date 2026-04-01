@@ -20,4 +20,4 @@ envVars:
   - key: ENABLE_CONTEXT_CACHE
     value: "false"
   - key: ENABLE_PRIVATE_CHATS
-    value: "false"
+    value: "true"
