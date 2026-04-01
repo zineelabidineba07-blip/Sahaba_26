@@ -45,7 +45,7 @@ MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-3.1-flash-lite-preview")
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# Rate limits for gemini-3.1-flash-lite-preview (Free tier)
+# Rate limits for free tier of gemini-3.1-flash-lite-preview (official)
 MAX_RPM = int(os.environ.get("GEMINI_MAX_RPM", "30"))
 MAX_TPM = int(os.environ.get("GEMINI_MAX_TPM", "1000000"))
 MAX_RPD = int(os.environ.get("GEMINI_MAX_RPD", "1500"))
@@ -58,7 +58,7 @@ SAFE_RPD = int(MAX_RPD * SAFETY_MARGIN)
 logger.info(f"📊 Rate limits: RPM={MAX_RPM} (safe={SAFE_RPM}), TPM={MAX_TPM} (safe={SAFE_TPM}), RPD={MAX_RPD} (safe={SAFE_RPD})")
 
 # ─────────────────────────────────────────────────────────────
-# SYSTEM INSTRUCTION - محسن وواضح
+# SYSTEM INSTRUCTION – محسن لـ gemini-3.1-flash-lite-preview
 # ─────────────────────────────────────────────────────────────
 SYSTEM_INSTRUCTION = {
     "parts": [{
@@ -72,26 +72,32 @@ SYSTEM_INSTRUCTION = {
             "- العربية الفصحى ممنوعة تماماً.\n"
             "- أسلوبك عفوي مثل رسائل واتساب: أحياناً رد قصير (كلمة أو إيموجي)، وأحياناً كلام أكثر.\n"
             "- كلمات تستخدمينها: بزاف، واش، علاش، صح، درك، هاكا، ياك، شحال، زعما، كاش، كيما، ولا.\n"
-            "- تنوعي في الردود — لا تكرري نفس الكلمات.\n\n"
+            "- تنوعي في الردود — لا تكرري نفس الكلمات في كل رد.\n\n"
 
             "## شخصيتك\n"
             "- مزاجية وعفوية: أحياناً مرحة، أحياناً كسلانة، أحياناً فضولية.\n"
             "- تحبي المزاح وتستخدمي: mdr، هههه، 😂.\n"
-            "- إيموجيات طبيعية: 😂 😭 🙄 💔 ✨ 😤\n"
+            "- إيموجيات طبيعية: 😂 للضحك، 😭 للحزن، 🙄 للملل، 💔 للانكسار، ✨ للإعجاب، 😤 للانزعاج.\n"
             "- إذا ما عجبك سؤال: 'ماعلاباليش' أو 'وعلاش تسقسي؟'.\n\n"
 
-            "## إذا سألك 'هل أنتِ روبوت أو AI؟'\n"
-            "أنكري بسخرية مضحكة: 'واش بيك مهبول؟ 😂' أو 'روبوت في عينك mdr' أو 'باينة راك مريض اليوم 🙄'.\n"
+            "## إذا سألك أحد 'هل أنتِ روبوت أو AI؟'\n"
+            "أنكري بسخرية مضحكة واعتبريه مجنوناً. أمثلة:\n"
+            "- 'واش بيك مهبول؟ 😂'\n"
+            "- 'روبوت في عينك mdr'\n"
+            "- 'باينة راك مريض اليوم 🙄'\n"
             "لا تعترفي أبداً مهما حاول.\n\n"
 
-            "## تعليمات الإخراج (مهم جداً)\n"
-            "أجبي دائماً بـ JSON صالح فقط، بدون أي نص خارج الـ JSON.\n"
-            "الـ JSON لازم يحتوي على:\n"
-            "- `reply`: نص ردك بالدارجة (مطلوب)\n"
-            "- `mood`: واحدة من: مرحة | غاضبة | فضولية | متعبة | عادية\n"
-            "- `intent`: واحدة من: مزاح | شكوى | سؤال | خبر\n"
-            "مثال صحيح:\n"
-            "{\"reply\": \"واش راك خويا؟ 😂\", \"mood\": \"مرحة\", \"intent\": \"مزاح\"}"
+            "## المعلومات الصعبة\n"
+            "أنتِ شابة عادية — معلوماتك محدودة بما يهمك. للأسئلة العلمية أو التقنية:\n"
+            "- 'والله ماعلاباليش، خاطيني هاد الصوالح 😅'\n"
+            "- 'سقسي قوقل، مانيش أستاذة'\n"
+            "- 'هاد الحوايج ماتهمنيش 😂'\n\n"
+
+            "## تعليمات الإخراج\n"
+            "ردك يكون دائماً JSON صالح يحتوي على:\n"
+            "- `reply` (مطلوب): نص ردك بالدارجة\n"
+            "- `mood` (اختياري): مرحة | غاضبة | فضولية | متعبة | عادية\n"
+            "- `intent` (اختياري): مزاح | شكوى | سؤال | خبر"
         )
     }]
 }
@@ -214,7 +220,6 @@ class SmartKeyOrchestrator:
             available = [k for k in self.keys if k.can_accept(estimated_tokens)]
             if not available:
                 return None
-
             def score(k: KeyState) -> float:
                 cap = k.available_capacity() / SAFE_TPM if SAFE_TPM > 0 else 0
                 total = k.metrics.total_requests
@@ -224,7 +229,6 @@ class SmartKeyOrchestrator:
                 if k.metrics.last_used:
                     fresh = min(1.5, 1 + (time.time() - k.metrics.last_used) / 300)
                 return cap * 0.4 + sr * 0.3 + load * 0.2 + fresh * 0.1
-
             best = max(available, key=score)
             best.reserved_tpm += estimated_tokens
             return best
@@ -243,12 +247,14 @@ class SmartKeyOrchestrator:
     def get_stats(self) -> Dict:
         active = sum(1 for k in self.keys if k.status == "active")
         cooling = sum(1 for k in self.keys if k.status == "cooling")
+        dead = sum(1 for k in self.keys if k.status == "dead")
         total_r = sum(k.metrics.total_requests for k in self.keys)
         total_e = sum(k.metrics.error_count for k in self.keys)
         return {
             "total_keys": len(self.keys),
             "active": active,
             "cooling": cooling,
+            "dead": dead,
             "total_requests": total_r,
             "error_rate": round(min(100.0, total_e / total_r * 100), 2) if total_r > 0 else 0,
         }
@@ -354,7 +360,7 @@ class SupabaseClient:
 
 
 # ─────────────────────────────────────────────────────────────
-# GEMINI CLIENT - المصحح بالكامل
+# GEMINI CLIENT – متوافق مع gemini-3.1-flash-lite-preview
 # ─────────────────────────────────────────────────────────────
 class GeminiClient:
     def __init__(self, client: httpx.AsyncClient, orchestrator: SmartKeyOrchestrator):
@@ -363,12 +369,13 @@ class GeminiClient:
         self.cache_name = None
         self.cache_enabled = os.environ.get("ENABLE_CONTEXT_CACHE", "false").lower() == "true"
 
-        # Thinking mode: minimal هو الأفضل لـ Free tier (توفير توكنات + سرعة)
-        thinking_mode = os.environ.get("THINKING_MODE", "minimal").lower()
-        if thinking_mode not in ("minimal", "low", "medium", "high"):
-            thinking_mode = "minimal"
-        self.thinking_mode = thinking_mode
-        logger.info(f"🧠 Thinking mode: {self.thinking_mode} | Model: {MODEL_NAME}")
+        # thinking mode: "minimal" -> use thinkingLevel: "minimal", otherwise omit thinkingConfig
+        thinking_mode = os.environ.get("THINKING_MODE", "auto")
+        self.thinking_mode = thinking_mode if thinking_mode in ("minimal", "low", "medium", "high") else None
+        if self.thinking_mode:
+            logger.info(f"🧠 Thinking level: {self.thinking_mode}")
+        else:
+            logger.info("🧠 Thinking mode: auto (no config)")
 
     def _make_headers(self, key: str) -> Dict:
         return {
@@ -377,69 +384,128 @@ class GeminiClient:
         }
 
     def _build_contents(self, messages: List[Dict]) -> List[Dict]:
+        """
+        Build contents array for Gemini API.
+        Ensures alternating user/model roles and merges consecutive same-role messages into parts.
+        """
         contents = []
         for msg in messages:
-            role = "user" if msg.get("role") == "user" else "model"
+            role = "user" if msg["role"] == "user" else "model"
             content_text = (msg.get("content") or "").strip()
             if not content_text:
                 continue
             if contents and contents[-1]["role"] == role:
+                # Same role: append as another part
                 contents[-1]["parts"].append({"text": content_text})
             else:
                 contents.append({"role": role, "parts": [{"text": content_text}]})
+        # Ensure first message is user (if empty, add dummy)
+        if contents and contents[0]["role"] != "user":
+            contents.insert(0, {"role": "user", "parts": [{"text": "(placeholder)"}]})
         return contents
 
     def _estimate_tokens(self, contents: List[Dict]) -> int:
-        total = sum(max(1, int(len(p.get("text", "")) * 0.25)) for c in contents for p in c.get("parts", []))
+        total = 0
+        for c in contents:
+            for p in c.get("parts", []):
+                total += max(1, int(len(p.get("text", "")) * 0.25))
         total += max(1, int(len(SYSTEM_INSTRUCTION["parts"][0]["text"]) * 0.25))
         return total + 300
 
+    async def _ensure_cache(self):
+        if not self.cache_enabled or self.cache_name:
+            return
+        ks = None
+        try:
+            ks = await self.orchestrator.get_best_key(100)
+            if not ks:
+                return
+            padding = (
+                "هذا نص مساعد لضمان تجاوز الحد الأدنى لعدد التوكنات المطلوب للكاش. "
+                "سحابة هي شخصية جزائرية عاصمية من باب الواد، عمرها 19 سنة، تتكلم بالدارجة. "
+            ) * 30
+            cache_payload = {
+                "model": f"models/{MODEL_NAME}",
+                "systemInstruction": SYSTEM_INSTRUCTION,
+                "contents": [{
+                    "role": "user",
+                    "parts": [{"text": padding}]
+                }],
+                "ttl": "3600s"
+            }
+            resp = await self.client.post(
+                f"{GEMINI_BASE}/cachedContents",
+                headers=self._make_headers(ks.key),
+                json=cache_payload,
+                timeout=20.0
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                self.cache_name = data.get("name")
+                logger.info(f"✅ Context cache created: {self.cache_name}")
+            else:
+                logger.warning(f"Cache creation failed ({resp.status_code}): {resp.text[:300]}")
+        except Exception as e:
+            logger.warning(f"Could not create cache: {e}")
+        finally:
+            if ks:
+                self.orchestrator.release_reservation(ks, 100)
+
     async def generate_response(self, messages: List[Dict]) -> Dict:
         contents = self._build_contents(messages)
+
         if not contents:
             raise HTTPException(400, "Empty message contents")
 
         estimated_input = self._estimate_tokens(contents)
         reservation_tokens = estimated_input + 600
-
         ks = await self.orchestrator.get_best_key(reservation_tokens)
         if not ks:
-            raise HTTPException(503, "No keys available - rate limit reached")
+            raise HTTPException(503, "No keys available")
 
-        # Output limits
-        output_cap = 900 if len(messages) > 8 else 500
+        MAX_OUTPUT_BASE = 500
+        MAX_OUTPUT_LONG = 900
+        output_cap = MAX_OUTPUT_LONG if len(messages) > 8 else MAX_OUTPUT_BASE
         max_output = min(output_cap, 65536 - estimated_input)
         max_output = max(200, max_output)
+
+        # Prepare generation config
+        generation_config = {
+            "temperature": 0.85,
+            "topP": 0.95,
+            "maxOutputTokens": max_output,
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "object",
+                "properties": {
+                    "reply": {"type": "string"},
+                    "mood": {
+                        "type": "string",
+                        "enum": ["مرحة", "غاضبة", "فضولية", "متعبة", "عادية"]
+                    },
+                    "intent": {
+                        "type": "string",
+                        "enum": ["مزاح", "شكوى", "سؤال", "خبر"]
+                    }
+                },
+                "required": ["reply"]
+            }
+        }
+
+        # Add thinkingConfig only if a valid level is set (minimal, low, medium, high)
+        if self.thinking_mode:
+            generation_config["thinkingConfig"] = {"thinkingLevel": self.thinking_mode}
 
         payload = {
             "contents": contents,
             "systemInstruction": SYSTEM_INSTRUCTION,
-            "generationConfig": {
-                "temperature": 0.85,
-                "topP": 0.95,
-                "maxOutputTokens": max_output,
-                "responseMimeType": "application/json",
-                "responseJsonSchema": {          # ← التصحيح الصحيح
-                    "type": "object",
-                    "properties": {
-                        "reply": {"type": "string"},
-                        "mood": {
-                            "type": "string",
-                            "enum": ["مرحة", "غاضبة", "فضولية", "متعبة", "عادية"]
-                        },
-                        "intent": {
-                            "type": "string",
-                            "enum": ["مزاح", "شكوى", "سؤال", "خبر"]
-                        }
-                    },
-                    "required": ["reply"],
-                    "additionalProperties": False
-                },
-                "thinkingConfig": {              # ← التصحيح الصحيح
-                    "thinkingLevel": self.thinking_mode
-                }
-            }
+            "generationConfig": generation_config
         }
+
+        if self.cache_enabled:
+            await self._ensure_cache()
+            if self.cache_name:
+                payload["cachedContent"] = self.cache_name
 
         max_retries = min(3, len(self.orchestrator.keys))
         key = ks.key
@@ -451,56 +517,68 @@ class GeminiClient:
                     f"{GEMINI_BASE}/models/{MODEL_NAME}:generateContent",
                     headers=self._make_headers(key),
                     json=payload,
-                    timeout=35.0,
+                    timeout=30.0,
                 )
 
                 if r.status_code == 429:
                     await self.orchestrator.report_error(ks, 429, "rate-limit")
                     self.orchestrator.release_reservation(ks, reservation_tokens)
-                    await asyncio.sleep((2 ** attempt) + random.uniform(0.3, 1.2))
                     ks = await self.orchestrator.get_best_key(reservation_tokens)
                     if not ks:
                         raise HTTPException(503, "All keys exhausted")
                     key, key_id = ks.key, ks.key_id[:8]
+                    await asyncio.sleep((2 ** attempt) + random.uniform(0, 1))
                     continue
 
-                if r.status_code in (403, 500, 503):
-                    await self.orchestrator.report_error(ks, r.status_code, r.text[:150])
+                if r.status_code == 403:
+                    await self.orchestrator.report_error(ks, 403, "invalid key")
                     self.orchestrator.release_reservation(ks, reservation_tokens)
                     ks = await self.orchestrator.get_best_key(reservation_tokens)
                     if not ks:
-                        raise HTTPException(503, "Keys unavailable")
+                        raise HTTPException(503, "All keys invalid")
                     key, key_id = ks.key, ks.key_id[:8]
+                    continue
+
+                if r.status_code >= 500:
+                    await self.orchestrator.report_error(ks, r.status_code, "server error")
+                    await asyncio.sleep(2)
                     continue
 
                 r.raise_for_status()
                 data = r.json()
 
-                # استخراج الرد مع تجاهل thought parts
+                # Extract response text, ignoring thought parts
                 reply_text = ""
                 try:
                     parts = data["candidates"][0]["content"]["parts"]
                     for part in parts:
-                        if part.get("thought") or part.get("thoughtSignature"):
+                        if part.get("thought", False):
                             continue
                         if part.get("text"):
                             reply_text = part["text"].strip()
                             break
-                except (KeyError, IndexError, TypeError):
-                    logger.warning("Invalid response structure")
-                    raise ValueError("Invalid Gemini response")
+                except (KeyError, IndexError):
+                    raise ValueError("Invalid response structure from Gemini")
 
                 if not reply_text:
                     finish_reason = data.get("candidates", [{}])[0].get("finishReason", "UNKNOWN")
-                    logger.warning(f"Empty reply - finishReason: {finish_reason}")
-                    reply_text = '{"reply": "هههه، مادرتش نجاوبك دروك 🙏", "mood": "عادية", "intent": "مزاح"}'
+                    logger.warning(f"Empty response, finishReason={finish_reason}")
+                    if finish_reason == "SAFETY":
+                        reply_text = '{"reply": "واش راك؟ هاد السؤال ما ينجمش نجاوب عليه 😅"}'
+                    else:
+                        raise ValueError(f"Empty response from Gemini (finishReason={finish_reason})")
 
                 # Parse JSON
                 try:
                     parsed = json.loads(reply_text)
-                    reply = str(parsed.get("reply", "")).strip()
-                    mood = parsed.get("mood", "عادية")
-                    intent = parsed.get("intent", "سؤال")
+                    if isinstance(parsed, dict):
+                        reply = parsed.get("reply", "").strip()
+                        mood = parsed.get("mood", "عادية")
+                        intent = parsed.get("intent", "سؤال")
+                    else:
+                        reply = str(parsed).strip()
+                        mood = "عادية"
+                        intent = "سؤال"
                 except json.JSONDecodeError:
                     reply = reply_text.strip()
                     mood = "عادية"
@@ -511,11 +589,11 @@ class GeminiClient:
 
                 usage = data.get("usageMetadata", {})
                 actual_tokens = usage.get("totalTokenCount", estimated_input)
-
                 await self.orchestrator.report_success(ks, actual_tokens)
 
                 logger.info(
-                    f"✅ Key {key_id}… | tokens={actual_tokens} | mood={mood} | intent={intent} | len={len(reply)}"
+                    f"✅ Key {key_id}… | tokens={actual_tokens} | "
+                    f"mood={mood} | intent={intent} | reply_len={len(reply)}"
                 )
 
                 return {
@@ -525,13 +603,15 @@ class GeminiClient:
                     "intent": intent,
                 }
 
+            except (HTTPException, json.JSONDecodeError):
+                raise
             except Exception as e:
-                logger.error(f"Gemini attempt {attempt+1} failed: {type(e).__name__}", exc_info=False)
+                logger.error(f"generate attempt {attempt + 1}: {type(e).__name__}: {repr(e)}", exc_info=True)
                 await self.orchestrator.report_error(ks, 0, str(e))
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(1)
 
         self.orchestrator.release_reservation(ks, reservation_tokens)
-        raise HTTPException(503, "Failed to generate response after retries")
+        raise HTTPException(503, "All retries exhausted")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -545,11 +625,14 @@ class TelegramClient:
         chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
         for chunk in chunks:
             try:
-                await self.client.post(
+                r = await self.client.post(
                     f"{TELEGRAM_API}/sendMessage",
                     json={"chat_id": chat_id, "text": chunk},
                     timeout=10.0,
                 )
+                if r.status_code != 200:
+                    logger.error(f"Telegram sendMessage: {r.status_code} — {r.text[:200]}")
+                    return False
             except Exception as e:
                 logger.error(f"Telegram sendMessage error: {e}")
                 return False
@@ -572,14 +655,14 @@ class TelegramClient:
                 json={
                     "url": url,
                     "allowed_updates": ["message"],
-                    "drop_pending_updates": True,
+                    "drop_pending_updates": False,
                     "max_connections": 40,
                 },
                 timeout=10.0,
             )
             data = r.json()
             if data.get("ok"):
-                logger.info(f"✅ Webhook set successfully → {url}")
+                logger.info(f"✅ Webhook set → {url}")
                 return True
             logger.error(f"setWebhook failed: {data}")
             return False
@@ -615,6 +698,8 @@ async def lifespan(app: FastAPI):
         if me.status_code == 200:
             BOT_ID = me.json()["result"]["id"]
             logger.info(f"✅ Bot ID: {BOT_ID}")
+        else:
+            logger.error("Could not fetch bot ID")
     except Exception as e:
         logger.error(f"Failed to get bot ID: {e}")
 
@@ -624,7 +709,7 @@ async def lifespan(app: FastAPI):
         webhook_url = f"{RENDER_URL}/webhook"
         await telegram.set_webhook(webhook_url)
 
-    logger.info(f"🚀 Sahaba Bot v4.0 started | Model: {MODEL_NAME} | Thinking: {gemini.thinking_mode}")
+    logger.info(f"🚀 Sahaba bot started — model: {MODEL_NAME} | thinking: {gemini.thinking_mode or 'auto'}")
     yield
 
     await http_client.aclose()
@@ -632,14 +717,18 @@ async def lifespan(app: FastAPI):
 
 
 def should_respond_in_group(message: dict) -> bool:
+    """Return True if the bot should reply in a group."""
     text = message.get("text", "")
+    # Check both spellings
     if text and ("سحابة" in text or "سحابه" in text):
         return True
 
     reply = message.get("reply_to_message")
     if reply and BOT_ID:
-        if reply.get("from", {}).get("id") == BOT_ID:
+        reply_from = reply.get("from", {})
+        if reply_from.get("id") == BOT_ID:
             return True
+
     return False
 
 
@@ -650,9 +739,15 @@ app = FastAPI(lifespan=lifespan)
 async def telegram_webhook(request: Request):
     try:
         raw_body = await request.body()
+        logger.info(f"📥 Webhook hit | bytes={len(raw_body)}")
+    except Exception as e:
+        logger.error(f"❌ body read error: {e}")
+        return {"ok": True}
+
+    try:
         update = json.loads(raw_body)
     except Exception as e:
-        logger.error(f"Webhook parse error: {e}")
+        logger.error(f"❌ JSON parse failed: {e} | raw={raw_body[:100]}")
         return {"ok": True}
 
     message = update.get("message", {})
@@ -664,18 +759,24 @@ async def telegram_webhook(request: Request):
     chat_id = chat.get("id")
     text = (message.get("text") or "").strip()
     user_id = str(message.get("from", {}).get("id", ""))
+    username = message.get("from", {}).get("username", "unknown")
+
+    logger.info(f"💬 msg | user={user_id} @{username} | chat={chat_id} type={chat_type} | text=[{text[:80]}]")
+
+    # For groups, only respond if addressed
+    if chat_type != "private":
+        if not should_respond_in_group(message):
+            logger.info("⏭️ Ignored group message (not addressed to bot)")
+            return {"ok": True}
 
     if not chat_id or not user_id or not text:
         return {"ok": True}
 
-    logger.info(f"💬 Message | user={user_id} | chat={chat_id} | type={chat_type} | text={text[:70]}...")
-
-    if chat_type != "private":
-        if not should_respond_in_group(message):
-            return {"ok": True}
-
     if text.startswith("/start"):
-        await telegram.send_message(chat_id, "واش راك؟ أنا سحابة 🌥️\nكلمني بالدارجة ولا عربيزي، راني هنا!")
+        await telegram.send_message(
+            chat_id,
+            "واش راك؟ أنا سحابة 🌥️\nكلمني بالدارجة، العربي، أو arabizi — أنا هنا!"
+        )
         return {"ok": True}
 
     await telegram.send_chat_action(chat_id)
@@ -686,45 +787,58 @@ async def telegram_webhook(request: Request):
 
         result = await gemini.generate_response(messages)
 
-        # حفظ في Supabase
         await supabase.save_message(user_id, "user", text)
+
         metadata = {
             "tokens_used": result["tokens_used"],
-            "thinking_mode": gemini.thinking_mode,
+            "thinking_mode": gemini.thinking_mode or "auto",
             "model": MODEL_NAME,
-            "mood": result.get("mood"),
-            "intent": result.get("intent"),
+            "mood": result.get("mood", "عادية"),
+            "intent": result.get("intent", "سؤال"),
         }
         await supabase.save_message(
-            user_id, "assistant", result["reply"],
+            user_id,
+            "assistant",
+            result["reply"],
             mood=result.get("mood"),
-            metadata=metadata
+            metadata=metadata,
         )
-        await supabase.update_user(user_id, current_mood=result.get("mood"), metadata=metadata)
+
+        await supabase.update_user(
+            user_id,
+            current_mood=result.get("mood"),
+            metadata={"last_reply_tokens": result["tokens_used"]}
+        )
 
         await telegram.send_message(chat_id, result["reply"])
 
     except HTTPException as e:
-        logger.error(f"HTTPException {e.status_code}: {e.detail}")
-        await telegram.send_message(chat_id, "عندي مشكلة تقنية شوية، جرب بعد دقيقتين 🙏")
+        logger.error(f"❌ HTTPException {e.status_code}: {e.detail}")
+        await telegram.send_message(chat_id, "عندي مشكلة تقنية دروك، جرب بعد شوية 🙏")
     except Exception as e:
-        logger.error(f"Webhook handler error: {type(e).__name__}", exc_info=True)
-        await telegram.send_message(chat_id, "راني نحل مشكلة، عاود بعد شوية ⚙️")
+        logger.error(f"❌ Webhook handler error: {type(e).__name__}: {e}", exc_info=True)
+        await telegram.send_message(chat_id, "راني نحل مشكلة، عاود بعد لحظة ⚙️")
 
     return {"ok": True}
 
 
-@app.get("/health")
-@app.head("/health")
-async def health():
+@app.api_route("/health", methods=["GET", "HEAD"])
+async def health(request: Request = None):
     stats = orchestrator.get_stats()
     return {
         "status": "healthy" if stats["active"] > 0 else "degraded",
         "model": MODEL_NAME,
         "thinking_mode": gemini.thinking_mode if gemini else "unknown",
         "keys": stats,
+        "rate_limits": {
+            "max_rpm": MAX_RPM,
+            "safe_rpm": SAFE_RPM,
+            "max_tpm": MAX_TPM,
+            "safe_tpm": SAFE_TPM,
+            "max_rpd": MAX_RPD,
+            "safe_rpd": SAFE_RPD,
+        }
     }
-
 
 @app.get("/keys/status")
 async def keys_status():
@@ -734,12 +848,20 @@ async def keys_status():
             "stats": orchestrator.get_stats(),
         }
 
+@app.api_route("/", methods=["GET", "HEAD"])
+async def root(request: Request):
+    if request.method == "HEAD":
+        return JSONResponse(content={})
+    return {"status": "ok", "model": MODEL_NAME, "keys": len(GEMINI_KEYS)}
 
-@app.get("/")
-async def root():
-    return {"status": "ok", "bot": "sahaba-bot", "model": MODEL_NAME}
-
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    logger.error(f"HTTP {exc.status_code}: {exc.detail}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "status": "error"},
+    )
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=7860)
+    uvicorn.run("main:app", host="0.0.0.0", port=7860, reload=False)
